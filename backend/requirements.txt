@@ -1,0 +1,67 @@
+# =============================================================================
+# Agentic AI Ops Platform — Backend Dependencies
+# =============================================================================
+# Install with: pip install -r requirements.txt
+# Python 3.12+ required
+
+# ─── Web Framework ────────────────────────────────────────────────────────────
+fastapi==0.115.5                  # Modern async web framework
+uvicorn[standard]==0.32.1         # ASGI server (uvicorn + websockets + httptools)
+python-multipart==0.0.20          # File upload support
+
+# ─── Configuration & Validation ───────────────────────────────────────────────
+pydantic==2.10.3                  # Data validation (v2 with full Rust speed)
+pydantic-settings==2.6.1          # Settings management with .env support
+python-dotenv==1.0.1              # Load .env file
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+sqlalchemy==2.0.36                # ORM (async + sync, v2 style)
+aiosqlite==0.20.0                 # Async SQLite driver
+alembic==1.14.0                   # Database migrations (we'll use this in Phase 1)
+
+# ─── Authentication ───────────────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0  # JWT tokens
+passlib[bcrypt]==1.7.4            # Password hashing
+
+# ─── Rate Limiting ────────────────────────────────────────────────────────────
+slowapi==0.1.9                    # Rate limiting for FastAPI
+
+# ─── LangGraph & LangChain (Core AI) ─────────────────────────────────────────
+langgraph==0.2.60                 # Agent orchestration framework
+langchain==0.3.13                 # LLM application framework
+langchain-openai==0.2.14          # OpenAI integration
+langchain-community==0.3.13       # Community integrations
+langgraph-checkpoint-sqlite==2.0.5 # SQLite checkpointer for LangGraph
+
+# ─── OpenAI ───────────────────────────────────────────────────────────────────
+openai==1.109.1                   # OpenAI Python SDK
+
+# ─── Vector Database ──────────────────────────────────────────────────────────
+qdrant-client==1.12.1             # Qdrant vector DB client
+
+# ─── Document Processing ──────────────────────────────────────────────────────
+langchain-text-splitters==0.3.3   # Text chunking strategies
+pypdf==5.1.0                      # PDF parsing
+python-docx==1.1.2                # Word document parsing
+tiktoken==0.8.0                   # Token counting (OpenAI tokenizer)
+
+# ─── Observability ────────────────────────────────────────────────────────────
+langsmith==0.2.3                  # LangSmith tracing + evaluation
+structlog==24.4.0                 # Structured logging
+
+# ─── MCP (Model Context Protocol) ─────────────────────────────────────────────
+mcp==1.2.0                        # Official MCP Python SDK
+
+# ─── HTTP Client ──────────────────────────────────────────────────────────────
+httpx==0.28.1                     # Async HTTP client (for A2A + MCP)
+
+# ─── Testing ──────────────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+httpx==0.28.1                     # Test client for FastAPI
+
+# ─── Utilities ────────────────────────────────────────────────────────────────
+rich==13.9.4                      # Beautiful console output
+tenacity==9.0.0                   # Retry logic
+python-dateutil==2.9.0            # Date parsing utilities
