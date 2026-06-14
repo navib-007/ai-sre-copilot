@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     qdrant_url: str = Field(default="")
     qdrant_api_key: str = Field(default="")
     qdrant_docs_collection: str = Field(default="knowledge_base")
+    qdrant_timeout_seconds: int = Field(
+        default=30,
+        description=(
+            "Qdrant client request timeout in seconds. "
+            "Default 5s is too short for cross-region cloud clusters (e.g., India → us-west-1). "
+            "Set to 30s or higher for cloud deployments with network latency."
+        ),
+    )
     qdrant_memory_collection: str = Field(default="semantic_memory")
 
     # ── LangSmith ─────────────────────────────────────────────────────────────
@@ -83,6 +91,51 @@ class Settings(BaseSettings):
     langchain_api_key: str = Field(default="")
     langchain_project: str = Field(default="agentic-ai-ops")
     langchain_endpoint: str = Field(default="https://api.smith.langchain.com")
+
+    # ── Agent Configuration (Phase 3+) ────────────────────────────────────────
+    # LLM generation parameters
+    agent_temperature: float = Field(
+        default=0.0,
+        description="LLM temperature for agents (0.0=deterministic, 1.0=creative)",
+    )
+    agent_max_tokens: int = Field(
+        default=2048,
+        description="Maximum tokens in agent LLM response",
+    )
+    agent_max_iterations: int = Field(
+        default=3,
+        description="Maximum ReAct iterations before agent stops (prevents infinite loops)",
+    )
+
+    # RAG retrieval parameters
+    rag_max_chunks: int = Field(
+        default=5,
+        description="Maximum document chunks to retrieve per RAG search",
+    )
+    rag_min_score: float = Field(
+        default=0.30,
+        description="Minimum cosine similarity score for RAG results (0.0-1.0)",
+    )
+
+    # ── Supervisor Configuration (Phase 4+) ──────────────────────────────────
+    # Intent routing thresholds
+    supervisor_intent_confidence_threshold: float = Field(
+        default=0.70,
+        description=(
+            "Minimum confidence for intent routing. "
+            "Below this threshold, defaults to knowledge_query (safest fallback)."
+        ),
+    )
+    # Enable/disable specific agents (useful for testing individual agents)
+    enable_ticket_agent: bool = Field(
+        default=True,
+        description="Enable the Ticket Management specialist agent.",
+    )
+    enable_incident_agent: bool = Field(
+        default=True,
+        description="Enable the Incident Investigation specialist agent.",
+    )
+
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = Field(default="DEBUG")

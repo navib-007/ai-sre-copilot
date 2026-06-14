@@ -35,10 +35,15 @@ def get_qdrant_client() -> AsyncQdrantClient:
     Falls back to in-memory mode if URL is not configured (for tests).
     """
     if settings.qdrant_url and settings.qdrant_api_key:
-        logger.info("qdrant_client_cloud", url=settings.qdrant_url[:30])
+        logger.info(
+            "qdrant_client_cloud",
+            url=settings.qdrant_url[:30],
+            timeout=settings.qdrant_timeout_seconds,
+        )
         return AsyncQdrantClient(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key,
+            timeout=settings.qdrant_timeout_seconds,  # Configurable via QDRANT_TIMEOUT_SECONDS in .env
         )
     else:
         # In-memory Qdrant — data lost on restart, perfect for testing
