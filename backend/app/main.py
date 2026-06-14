@@ -101,6 +101,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_semantic_memory_collection(qclient)
     logger.info("qdrant_semantic_memory_ready")
 
+    # Step 2d: Initialize LangGraph checkpointer async connection
+    # get_checkpointer() internally handles entering the context manager and yields the actual
+    # AsyncSqliteSaver database connection instance to store it.
+    from app.db.database import get_checkpointer
+    await get_checkpointer()
+    logger.info("checkpointer_connection_ready")
+
     # Step 3: Seed sample data (idempotent — safe to call every time)
     try:
         from app.db.seed import run_seed
@@ -314,6 +321,10 @@ def _add_routers(app: FastAPI) -> None:
     # Phase 3 routes — AI Agent Chat
     from app.routes import chat
     app.include_router(chat.router, prefix=API_PREFIX)
+
+    # Phase 6 routes — Human-in-the-Loop Approvals
+    from app.routes import approvals
+    app.include_router(approvals.router, prefix=API_PREFIX)
 
     # ── Root endpoint ─────────────────────────────────────────────────────────
     @app.get("/", tags=["Root"], summary="API welcome")

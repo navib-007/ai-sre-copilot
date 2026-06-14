@@ -69,9 +69,10 @@ Classify the user's message into exactly ONE of these intents:
    "Update TKT-42 to resolved", "Show me high-priority tickets"
 
 3. **incident_investigation** — User is reporting an active outage, performance issue,
-   or production incident that needs investigation.
-   Examples: "The payment service is down", "P1 incident: API gateway returning 503s",
-   "We have high CPU on the database server, investigate please"
+   production incident that needs investigation, or is instructing the agent to execute/proceed
+   with an approved remediation action.
+   Examples: "The [service-name] is returning 500 errors", "P1 incident: [resource] is down",
+   "I have approved Request ID [ID]. Go ahead and execute the action.", "Proceed with the approved action"
 
 4. **general_chat** — Greetings, help requests, or questions not fitting above categories.
    Examples: "Hello", "What can you do?", "Help", "Thanks"
@@ -194,7 +195,7 @@ async def _direct_response(user_message: str, state: dict, llm: ChatOpenAI) -> d
 
 # ─── Supervisor Builder ───────────────────────────────────────────────────────
 
-def build_supervisor(db, retriever):
+def build_supervisor(db, retriever, session_id: str):
     """
     Build the supervisor as a pre-configured async callable.
 
@@ -206,8 +207,9 @@ def build_supervisor(db, retriever):
       the same interface: `await run_supervisor(supervisor, state)`
 
     Args:
-        db:        AsyncSession bound to this request
-        retriever: RAGRetriever singleton
+        db:         AsyncSession bound to this request
+        retriever:  RAGRetriever singleton
+        session_id: The session ID of the current chat thread
 
     Returns:
         An async callable with signature: (state: dict) -> dict
@@ -229,7 +231,7 @@ def build_supervisor(db, retriever):
     # Each agent captures the same `db` and `retriever` from this closure.
     rag_agent     = build_rag_agent(retriever=retriever, db=db)
     ticket_agent  = build_ticket_agent(db=db) if settings.enable_ticket_agent else None
-    incident_agent = build_incident_agent(db=db, retriever=retriever) if settings.enable_incident_agent else None
+    incident_agent = build_incident_agent(db=db, retriever=retriever, session_id=session_id) if settings.enable_incident_agent else None
 
     logger.info(
         "supervisor_built",

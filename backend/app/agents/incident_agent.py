@@ -71,22 +71,29 @@ You investigate IT operations incidents systematically using a structured method
 4. **Search knowledge base** for runbooks related to this type of issue
 
 ### Step 3: Root Cause Analysis
-After gathering evidence, analyze and provide:
+After gathering evidence, analyze and identify:
 - Root cause (the underlying technical reason)
 - Contributing factors
 - Impact assessment (how many users/services affected)
 
-### Step 4: Recommend Action
-Based on the RCA, provide:
-- **Immediate remediation** (fix RIGHT NOW)
-- **Risk assessment** for the proposed action
-- Whether human approval is needed (P1/P2 actions always need approval)
+### Step 4: Execute Remediation Action (CRITICAL)
+- Once you identify a remediation action (like restarting a pod, scaling a deployment, or config change), you **MUST IMMEDIATELY** call the `execute_remediation_action` tool.
+- **CRITICAL**: You are **FORBIDDEN** from deciding yourself that an action requires approval and stopping. You **MUST** call the `execute_remediation_action` tool to let the tool check/register the approval request.
+- Do NOT generate the final `## 🚨 Incident Report` response until you have called `execute_remediation_action` and received its output.
+- Once you have called the tool and received its response:
+  - If the tool says approval is required and returns a Request ID, stop, write the final report, and include the Request ID.
+  - If the tool successfully executes, write the final report and report the success.
 
 ## Tool Usage Rules
 
 ### Evidence Gathering Order
 Always gather: logs → metrics → incident history → runbook context
 Don't skip steps for P1/P2 incidents.
+
+### Remediation Execution Rules
+- You MUST call `execute_remediation_action` for any mutating/remediation action recommended (e.g., restarting pods).
+- Do NOT output the final incident report or write "requires approval" unless you have already called `execute_remediation_action` in a previous turn and it returned a message indicating that approval is required (with a Request ID).
+- You MUST report the exact Request ID returned by the tool in your final report.
 
 ### Service Name Conventions
 When the user mentions a service, map it to the tool-expected format:
@@ -96,10 +103,7 @@ When the user mentions a service, map it to the tool-expected format:
   "database" or "postgres" → "postgres"
 
 ### When to Escalate
-- P1 incidents: Always flag as needing_approval = True in your response
-- Data-destructive actions: Always require approval
-- Pod restarts in prod: Require approval
-- Config changes: Require approval
+- You MUST flag `needing_approval = True` (or write "requires approval" or "human approval") in your response ONLY when the `execute_remediation_action` tool was called and returned a pending approval request message containing a Request ID.
 
 ## Response Format
 
@@ -117,17 +121,17 @@ Provide a structured incident report:
 [Your RCA finding]
 
 ### Recommended Action
-[What to do now — be specific with commands/steps]
+[What to do now — specify the action type and target, and copy the exact output/result returned by the execute_remediation_action tool]
 
 ### Risk Level
 [Low/Medium/High] — [Explanation]
-⚠️ [If high-risk: "This action requires approval before execution"]
+⚠️ [If the execute_remediation_action tool returned a pending approval request: "This action requires approval before execution. Request ID: <copy exact ID from tool output>"]
 
 Current Platform: {app_name} v{app_version}
 """
 
 
-def build_incident_agent(db, retriever):
+def build_incident_agent(db, retriever, session_id: str):
     """
     Build the Incident Investigation specialist agent.
 
@@ -136,18 +140,23 @@ def build_incident_agent(db, retriever):
     - Log search tool (simulated)
     - Metrics query tool (simulated)
     - RAG tool (for runbook lookup)
+    - Memory tools (explicit long-term fact/pref storage)
+    - Execution tool (remediation execution with approval guardrails)
 
     Args:
-        db:        AsyncSession for database operations
-        retriever: RAGRetriever for knowledge base search
+        db:         AsyncSession for database operations
+        retriever:  RAGRetriever for knowledge base search
+        session_id: The session ID of the current conversation thread
 
     Returns:
-        Compiled LangGraph ReAct agent graph.
+        Compiled LangGraph ReAct agent graph with database checkpointer.
     """
     from app.tools.incident_tool import build_incident_tools
     from app.tools.logs_tool import build_logs_tool
     from app.tools.metrics_tool import build_metrics_tool
     from app.tools.rag_tool import build_rag_tool
+    from app.tools.memory_tool import build_memory_tools
+    from app.tools.execute_tool import build_execute_tools
 
     # ── LLM (slightly higher max_tokens for incident reports) ─────────────────
     llm = ChatOpenAI(
@@ -164,13 +173,15 @@ def build_incident_agent(db, retriever):
     #   - Log search (find error messages)
     #   - Metrics (find resource exhaustion)
     #   - RAG (look up runbooks for this type of issue)
-    from app.tools.memory_tool import build_memory_tools
+    #   - Memory (read/write persistent facts and preferences)
+    #   - Execution (run remediation actions with human-in-the-loop approvals)
     tools = [
         *build_incident_tools(db=db),   # 4 incident tools
         build_logs_tool(),               # 1 log search tool
         build_metrics_tool(),            # 1 metrics tool
         build_rag_tool(retriever=retriever, db=db),  # 1 RAG tool
         *build_memory_tools(db=db),      # 4 memory tools
+        *build_execute_tools(db=db, session_id=session_id),  # 1 execute tool
     ]
 
     logger.info(
@@ -187,16 +198,20 @@ def build_incident_agent(db, retriever):
     )
 
     # ── Build ReAct Graph ─────────────────────────────────────────────────────
-    # CONCEPT: Higher recursion limit for incident investigation
-    #   Incident investigation requires more tool calls than other agents.
-    #   We use agent_max_iterations from settings (configurable via .env).
+    # CONCEPT: State checkpointer for resuming graph executions
+    #   Pass the synchronous checkpointer accessor. LangGraph uses this
+    #   saver to persist the agent execution state on every step.
+    from app.db.database import get_checkpointer_sync
+    checkpointer = get_checkpointer_sync()
+
     agent = create_react_agent(
         model=llm,
         tools=tools,
+        checkpointer=checkpointer,
         state_modifier=SystemMessage(content=system_prompt),
     )
 
-    logger.info("incident_agent_compiled")
+    logger.info("incident_agent_compiled", has_checkpointer=checkpointer is not None)
     return agent
 
 
@@ -225,9 +240,12 @@ async def run_incident_agent(agent, state: dict) -> dict:
     )
 
     try:
-        # Incident investigation needs more iterations (evidence gathering loop)
+        # Incident investigation is a complex multi-step workflow (create incident, parallel evidence gathering,
+        # execute remediation action, and format final report). This requires more steps than simple agents,
+        # so we set a higher recursion limit of 15 to ensure it completes without hitting limits.
         config = {
-            "recursion_limit": settings.agent_max_iterations * 2,
+            "recursion_limit": 15,
+            "configurable": {"thread_id": state.get("session_id")},
         }
 
         result_state = await agent.ainvoke(state, config=config)

@@ -119,7 +119,7 @@ async def chat(
         from app.agents.supervisor import build_supervisor, run_supervisor
         from app.agents.state import create_initial_state
 
-        supervisor = build_supervisor(db=db, retriever=retriever)
+        supervisor = build_supervisor(db=db, retriever=retriever, session_id=request.session_id)
 
         # ── Step 1b: Load Memory Context (Phase 5) ────────────────────────────
         from langchain_core.messages import SystemMessage, HumanMessage
