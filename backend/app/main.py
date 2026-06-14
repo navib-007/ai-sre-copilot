@@ -94,6 +94,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await pipeline.ensure_collection_exists()
     logger.info("qdrant_collection_ready")
 
+    # Step 2c: Ensure Qdrant semantic memory collection exists
+    from app.rag.qdrant_client import get_qdrant_client
+    from app.memory.semantic import init_semantic_memory_collection
+    qclient = get_qdrant_client()
+    await init_semantic_memory_collection(qclient)
+    logger.info("qdrant_semantic_memory_ready")
+
     # Step 3: Seed sample data (idempotent — safe to call every time)
     try:
         from app.db.seed import run_seed
@@ -303,6 +310,10 @@ def _add_routers(app: FastAPI) -> None:
     # Phase 2 routes
     from app.routes import documents
     app.include_router(documents.router, prefix=API_PREFIX)
+
+    # Phase 3 routes — AI Agent Chat
+    from app.routes import chat
+    app.include_router(chat.router, prefix=API_PREFIX)
 
     # ── Root endpoint ─────────────────────────────────────────────────────────
     @app.get("/", tags=["Root"], summary="API welcome")

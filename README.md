@@ -1,244 +1,277 @@
 # Agentic AI Ops Platform
 
-## Phase 1: Foundation — Setup & Run Guide
+> A production-grade IT Operations AI assistant built to teach every major **Agentic Engineering concept** through hands-on implementation.
 
 ---
 
-## 📁 Project Structure Created
+## ✅ Phases Completed
+
+| Phase | Status | Milestone |
+|-------|--------|-----------|
+| **Phase 1: Foundation** | ✅ Done | FastAPI + SQLite + ticket/incident CRUD |
+| **Phase 2: RAG Pipeline** | ✅ Done | Document upload → chunk → embed → Qdrant |
+| **Phase 3: First Agent** | ✅ Done | LangGraph RAG Agent + `/api/chat` endpoint |
+| **Phase 4: Multi-Agent** | ✅ Done | Supervisor + intent routing + 3 specialist agents |
+| **Phase 5: Memory** | ✅ Done | Three-tier memory system (Short, Long & Semantic) |
+| **Phase 6: HITL** | ⏳ Pending | Human-in-the-loop approvals |
+
+---
+
+## 📁 Project Structure
 
 ```text
 .
-├── backend/                 ← FastAPI Backend Application
-│   ├── app/                 ← Application source code
-│   │   ├── main.py          ← FastAPI entry point
-│   │   ├── config.py        ← Centralized settings
-│   │   ├── db/              ← Database setup and ORM models
-│   │   ├── rag/             ← RAG Pipeline (Chunker, Embedder, Qdrant)
-│   │   ├── routes/          ← API Endpoints (Tickets, Incidents, Documents)
-│   │   └── schemas/         ← Pydantic validation schemas
-│   ├── data/                ← SQLite DB + Sample Docs (Ignored in Git)
-│   ├── logs/                ← Application Logs (Ignored in Git)
-│   ├── .env.example         ← Template for environment variables (copy to .env)
-│   ├── requirements.txt     ← Python dependencies
-│   └── pyproject.toml       ← Project metadata and linting rules
-├── .gitignore               ← Standard Git ignore rules for Python/environments
-└── README.md                ← Project documentation
+├── backend/
+│   ├── app/
+│   │   ├── main.py              ← FastAPI entry point
+│   │   ├── config.py            ← All settings via .env (no hardcoding)
+│   │   ├── db/                  ← SQLAlchemy ORM + database
+│   │   ├── rag/                 ← RAG Pipeline (Phase 2)
+│   │   ├── agents/              ← LangGraph Agent System (Phase 3+)
+│   │   │   ├── state.py         ← Shared AgentState TypedDict
+│   │   │   ├── rag_agent.py     ← RAG specialist (knowledge queries)
+│   │   │   ├── ticket_agent.py  ← Ticket specialist (CRUD operations)
+│   │   │   ├── incident_agent.py← Incident specialist (investigation)
+│   │   │   ├── rca_agent.py     ← RCA sub-agent (direct LLM call)
+│   │   │   └── supervisor.py    ← Orchestrator with intent routing
+│   │   ├── tools/               ← Agent Tools (Phase 3+)
+│   │   │   ├── rag_tool.py      ← Knowledge base search
+│   │   │   ├── ticket_tool.py   ← Ticket CRUD tools
+│   │   │   ├── incident_tool.py ← Incident management tools
+│   │   │   ├── logs_tool.py     ← Log search (simulated)
+│   │   │   └── metrics_tool.py  ← Metrics query (simulated)
+│   │   ├── routes/
+│   │   │   ├── tickets.py       ← REST API for tickets
+│   │   │   ├── incidents.py     ← REST API for incidents
+│   │   │   ├── documents.py     ← Document upload + search
+│   │   │   └── chat.py          ← AI Agent Chat (main entry point)
+│   │   └── schemas/
+│   │       └── chat.py          ← ChatRequest/ChatResponse schemas
+│   ├── .env.example             ← Template (copy to .env)
+│   └── requirements.txt
+└── README.md
 ```
 
 ---
 
-## 🚀 Step-by-Step Setup
+## 🚀 Setup Guide
 
-### Step 1: Create Virtual Environment
+### Step 1: Create & Activate Virtual Environment
 ```powershell
-# Navigate to backend directory
-cd "d:\GenAI\AgenticAI Project\backend"
-
-# Create virtual environment
-python -m venv .venv
-
-# Activate it (Windows PowerShell)
-.\.venv\Scripts\Activate.ps1
-
-# You should see (.venv) prefix in your terminal
+cd "d:\GenAI\AgenticAI Project"
+python -m venv venv
+.\venv\Scripts\Activate.ps1
 ```
 
-> ⚠️ If you get "execution policy" error on PowerShell, run first:
+> ⚠️ If you get an execution policy error:
 > `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
 ### Step 2: Install Dependencies
 ```powershell
-# Make sure .venv is activated (see Step 1)
+cd backend
 pip install -r requirements.txt
-
-# This installs: FastAPI, SQLAlchemy, LangGraph, OpenAI, Qdrant, etc.
-# Takes 2-3 minutes on first install.
 ```
 
 ### Step 3: Configure Environment Variables
-Open `backend\.env` and fill in your actual API keys:
-
-```env
-# Replace these placeholders with your real keys:
-OPENAI_API_KEY=sk-your-actual-openai-key
-QDRANT_URL=https://your-actual-cluster.qdrant.io
-QDRANT_API_KEY=your-actual-qdrant-key
-LANGCHAIN_API_KEY=your-actual-langsmith-key
+```powershell
+copy backend\.env.example backend\.env
 ```
 
-> For Phase 1, only `OPENAI_API_KEY` is required.
-> Qdrant and LangSmith are used in Phase 2+.
+Edit `backend\.env`:
+```env
+# Required
+OPENAI_API_KEY=sk-your-key
+QDRANT_URL=https://your-cluster.qdrant.io
+QDRANT_API_KEY=your-qdrant-key
+
+# Phase 3-4 agent tuning (defaults work fine)
+AGENT_TEMPERATURE=0.0
+AGENT_MAX_TOKENS=2048
+AGENT_MAX_ITERATIONS=3
+RAG_MAX_CHUNKS=5
+RAG_MIN_SCORE=0.30
+
+# Phase 4 supervisor
+SUPERVISOR_INTENT_CONFIDENCE_THRESHOLD=0.70
+ENABLE_TICKET_AGENT=true
+ENABLE_INCIDENT_AGENT=true
+```
 
 ### Step 4: Run the Server
 ```powershell
-# Make sure you're in backend/ and .venv is activated
+cd "d:\GenAI\AgenticAI Project\backend"
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-You should see output like:
-```
-INFO  application_starting  app_name='Agentic AI Ops Platform'  environment='development'
-INFO  database_initializing
-INFO  database_tables_created
-INFO  user_created  username='admin'  id=1  role='admin'
-INFO  ticket_created  id=1  title='Database backup failing...'  priority='high'
-INFO  application_started  host='0.0.0.0'  port=8000
-INFO  Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-```
+---
 
-### Step 5: Verify It Works
-Open your browser and visit:
+## 🧪 Testing the API
 
-| URL | What You'll See |
-|-----|----------------|
-| `http://localhost:8000` | Welcome JSON |
-| `http://localhost:8000/health` | Health check (database: connected) |
-| `http://localhost:8000/docs` | **Swagger UI** — Interactive API docs |
-| `http://localhost:8000/redoc` | ReDoc docs |
+Open `http://localhost:8000/docs` for interactive Swagger UI.
 
 ---
 
-## 🧪 Testing the API via Swagger UI
+## Phase 4 Tests — Multi-Agent Supervisor
 
-Go to `http://localhost:8000/docs` and try these:
+The supervisor auto-detects intent from the message. No need to specify which agent.
 
-### Test 1: List Tickets
-1. Click `GET /api/tickets/`
-2. Click "Try it out"
-3. Click "Execute"
-4. You should see 6 pre-seeded tickets
-
-### Test 2: Create a Ticket
-1. Click `POST /api/tickets/`
-2. Click "Try it out"
-3. Edit the request body:
-```json
-{
-  "title": "Redis connection timeout in auth-service",
-  "description": "The auth-service is getting Redis connection timeouts every 5 minutes. Error: ECONNRESET. Started after Redis upgrade to v7.2.",
-  "priority": "high",
-  "category": "database"
-}
+### Knowledge Query → RAG Agent
 ```
-4. Click "Execute"
-5. Response: `201 Created` with the new ticket
+POST http://localhost:8000/api/chat/
+Content-Type: application/json
 
-### Test 3: Filter Tickets by Priority
-1. Click `GET /api/tickets/`
-2. Click "Try it out"
-3. Set `priority` = `critical`
-4. Execute → See only critical tickets
-
-### Test 4: Update a Ticket
-1. Click `PATCH /api/tickets/{ticket_id}`
-2. Use `ticket_id` = `2` (the critical Kubernetes ticket)
-3. Body:
-```json
-{
-  "status": "resolved",
-  "resolution": "Restarted Redis pod and updated connection pool settings."
-}
+{"message": "How do I fix CrashLoopBackOff in Kubernetes?", "session_id": "test-001"}
 ```
-4. Execute → Status changes to "resolved"
 
-### Test 5: Create an Incident
-1. Click `POST /api/incidents/`
-2. Body:
-```json
-{
-  "title": "P1: API Gateway returning 503 errors",
-  "description": "The API gateway is returning 503 Service Unavailable for 30% of requests. Affecting all external API consumers.",
-  "severity": "P1",
-  "affected_services": "api-gateway,load-balancer"
-}
+### Ticket Operation → Ticket Agent
+```
+POST http://localhost:8000/api/chat/
+
+{"message": "Create a high-priority ticket: Redis connection timeouts in auth-service after the v3.2 deployment", "session_id": "test-002"}
+```
+
+```
+POST http://localhost:8000/api/chat/
+
+{"message": "Show me all open critical tickets", "session_id": "test-002"}
+```
+
+```
+POST http://localhost:8000/api/chat/
+
+{"message": "Resolve TKT-1 — issue was fixed by rolling back the Redis config", "session_id": "test-002"}
+```
+
+### Incident Investigation → Incident Agent (+ RCA)
+```
+POST http://localhost:8000/api/chat/
+
+{"message": "P1 incident: payment service is returning 503 errors. Pod memory at 98%. Investigate.", "session_id": "test-003"}
+```
+
+Expected flow (visible in server logs):
+1. Supervisor detects `incident_investigation`
+2. Incident Agent creates incident record
+3. Incident Agent searches logs (errors in payment-service)
+4. Incident Agent queries metrics (CPU, memory, error rate)
+5. Incident Agent searches incident history
+6. Incident Agent looks up runbook via RAG
+7. Returns structured incident report with RCA
+
+### General Chat → Direct Response (no tool calls)
+```
+POST http://localhost:8000/api/chat/
+
+{"message": "Hello! What can you help me with?", "session_id": "test-004"}
 ```
 
 ---
 
-## 🔍 Understanding the Logs
-
-When you make API calls, you'll see structured logs in the console:
-
-```
-INFO  request_started  request_id='a1b2c3d4'  method='POST'  path='/api/tickets/'
-INFO  db_session_opened
-INFO  create_ticket_request  title='Redis connection...'  priority='high'
-INFO  ticket_created  ticket_id=7  title='Redis connection timeout...'
-INFO  db_session_committed
-INFO  db_session_closed
-INFO  request_completed  request_id='a1b2c3d4'  status_code=201  duration_ms=45.3
-```
-
-Notice:
-- `request_id` ties all logs for ONE request together
-- Every DB operation is logged (session open/commit/close)
-- Duration in milliseconds helps spot slow endpoints
-- All fields are structured (key=value) for easy filtering
-
----
-
-## 📚 Key Concepts Learned in Phase 1
+## 🔍 Phase 4 Key Concepts Learned
 
 | Concept | Where It's Used | File |
 |---------|----------------|------|
-| **pydantic-settings** | Centralized config from .env | `app/config.py` |
-| **Structured Logging** | structlog JSON/console output | `app/logging_config.py` |
-| **Async SQLAlchemy** | ORM with async/await | `app/db/database.py` |
-| **ORM Models** | Python classes = DB tables | `app/db/models.py` |
-| **Pydantic Schemas** | Request validation + response serialization | `app/schemas/` |
-| **FastAPI Dependency Injection** | `Depends(get_db)` | `app/routes/tickets.py` |
-| **Lifespan Events** | Startup/shutdown logic | `app/main.py` |
-| **CORS Middleware** | Allow Streamlit to call API | `app/main.py` |
-| **Pagination** | `page` + `page_size` query params | `app/routes/tickets.py` |
-| **Soft Delete** | Set status=closed vs DELETE | `app/routes/tickets.py` |
-| **Audit Logging** | Immutable action trail | `app/db/models.py` + routes |
-| **Database Seeding** | Realistic test data | `app/db/seed.py` |
-| **Health Checks** | `/health` endpoint | `app/main.py` |
-| **App Factory Pattern** | `create_app()` function | `app/main.py` |
+| **Supervisor Pattern** | Orchestrator routes to specialist workers | `agents/supervisor.py` |
+| **Custom StateGraph** | Manual LangGraph graph (vs create_react_agent) | `agents/supervisor.py` |
+| **Intent Detection** | LLM classifies user intent as JSON | `agents/supervisor.py` |
+| **Conditional Edges** | LangGraph routing based on state value | `agents/supervisor.py` |
+| **Data-Mutating Tools** | Ticket/incident tools write to SQLite | `tools/ticket_tool.py` |
+| **Tool Factory Pattern** | Closure captures request-scoped DB session | All tool files |
+| **Simulated Tools** | Log/metrics tools generate realistic fake data | `tools/logs_tool.py` |
+| **Four Golden Signals** | CPU, latency, errors, saturation metrics | `tools/metrics_tool.py` |
+| **Sub-Agent Pattern** | RCA Agent called by Incident Agent | `agents/rca_agent.py` |
+| **Direct LLM Call** | RCA uses ainvoke() directly (no ReAct loop) | `agents/rca_agent.py` |
+| **Multi-Tool Agent** | Incident Agent has 7 tools for investigation | `agents/incident_agent.py` |
+| **Evidence Accumulation** | Agent builds context across multiple tool calls | `agents/incident_agent.py` |
+
+---
+
+## Phase 1-3 Tests (still work)
+
+### Tickets REST API
+```
+GET  http://localhost:8000/api/tickets/
+POST http://localhost:8000/api/tickets/
+GET  http://localhost:8000/api/tickets/?priority=critical
+```
+
+### Documents & RAG
+```
+POST http://localhost:8000/api/documents/upload       (multipart/form-data)
+POST http://localhost:8000/api/documents/search
+GET  http://localhost:8000/api/documents/
+```
+
+### Chat History
+```
+GET http://localhost:8000/api/chat/history/{session_id}
+GET http://localhost:8000/api/chat/sessions
+```
 
 ---
 
 ## 🐛 Common Issues & Fixes
 
-### Issue: `ModuleNotFoundError: No module named 'app'`
-**Fix**: Run uvicorn from inside the `backend/` directory, not from the project root.
-```powershell
-cd "d:\GenAI\AgenticAI Project\backend"
-uvicorn app.main:app --reload
-```
-
-### Issue: `ERROR: Address already in use`
-**Fix**: Port 8000 is in use. Either kill the other process or use a different port:
-```powershell
-uvicorn app.main:app --reload --port 8001
-```
-
-### Issue: `aiosqlite not found`
-**Fix**: Make sure your virtual environment is activated:
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
-
-### Issue: `422 Unprocessable Entity` on POST
-**Fix**: Check the request body. Pydantic validation failed.
-The error response tells you exactly which field failed and why.
-
-### Issue: PowerShell execution policy error
-**Fix**:
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
+| Problem | Fix |
+|---------|-----|
+| `ModuleNotFoundError: No module named 'app'` | Run uvicorn from `backend/` directory |
+| `422 Unprocessable Entity` on chat | Check `Content-Type: application/json` and non-empty `message` |
+| Agent goes straight to general_chat | Check OpenAI API key is valid |
+| Incident agent times out | Increase `AGENT_MAX_ITERATIONS` in .env |
+| Port already in use | Add `--port 8001` to uvicorn command |
+| PowerShell execution policy | `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` |
 
 ---
 
-## ➡️ Next: Phase 2 — RAG Pipeline
+## Phase 5 Tests — Memory System
 
-Once Phase 1 is working, we'll add:
-1. Document upload endpoint (`POST /api/documents/upload`)
-2. Text chunking with `langchain_text_splitters`
-3. OpenAI embeddings generation
-4. Qdrant vector storage
-5. Semantic search endpoint
-6. Sample IT runbook documents
+The memory system auto-loads short-term, long-term, and semantic memories on every query, and automatically extracts new memories at the end of each turn.
 
-The RAG pipeline is what powers the knowledge base that our AI agents use to answer questions.
+### Automated Tests
+Run the pytest suite to verify the memory database and vector store logic:
+```powershell
+# Set PYTHONPATH and run the memory unit tests
+cd backend
+cmd /c "set PYTHONPATH=.&& ..\venv\Scripts\pytest tests/test_memory.py -v"
+```
+
+### Manual Verification Flow
+1. **Explicit Preference Storage**:
+   Tell the agent:
+   ```json
+   {"message": "Please know that I prefer very short bullet-point answers. Also, we run Kubernetes version 1.28.", "session_id": "test-mem-001"}
+   ```
+2. **Contextual Awareness (Within Session)**:
+   In the same session, ask:
+   ```json
+   {"message": "What did I just say about Kubernetes?", "session_id": "test-mem-001"}
+   ```
+   *Expected response*: A very concise answer mentioning version 1.28.
+3. **Cross-Session Recall (Long-Term Memory)**:
+   Open a brand new session and ask about your preference:
+   ```json
+   {"message": "What is my preferred response format?", "session_id": "test-mem-002"}
+   ```
+   *Expected response*: The agent recalls your preference for "very short bullet-point answers" from the persistent `MemoryEntry` table, even though this is a new session.
+
+---
+
+## 🔍 Phase 5 Key Concepts Learned
+
+| Concept | Description | File |
+|---------|-------------|------|
+| **Short-Term Memory** | Conversation history buffer loaded chronologically from database | `memory/short_term.py` |
+| **Long-Term Memory** | Structured facts & preferences stored and retrieved per user | `memory/long_term.py` |
+| **Semantic Memory** | Embeddings-based vector search of past Q&A pairs in Qdrant | `memory/semantic.py` |
+| **Memory Consolidation** | Automatic extraction of facts & preferences at the end of each turn via LLM | `agents/memory_agent.py` |
+| **Explicit Memory Tools** | Giving agents tools (`save_user_preference`, `save_environment_fact`) | `tools/memory_tool.py` |
+
+---
+
+## ➡️ Next: Phase 6 — Human-in-the-Loop (Approval Workflow)
+
+Phase 6 adds:
+1. **Approval Node** — Pausing the execution graph for high-risk actions using LangGraph `interrupt()`.
+2. **State Persistence** — SQLite-based checkpointers to save graph state across server restarts.
+3. **Approvals Route** — Endpoints to inspect, approve, or reject pending actions.
+

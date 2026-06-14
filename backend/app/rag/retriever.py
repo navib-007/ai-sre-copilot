@@ -135,7 +135,15 @@ class RAGRetriever:
         # ── Step 1: Embed the query (uses cache) ──────────────────────────────
         # IMPORTANT: The query is embedded with the SAME model as the documents.
         # Using different models = incompatible vector spaces = bad results.
-        query_vector = await self._embedder.embed_text(query, db)
+        try:
+            query_vector = await self._embedder.embed_text(query, db)
+        except Exception as embed_err:
+            logger.error(
+                "rag_embed_failed",
+                query=query[:80],
+                error=str(embed_err),
+            )
+            return []  # Return empty results — let the agent handle gracefully
 
         # ── Step 2: Build optional metadata filter ────────────────────────────
         qdrant_filter = self._build_filter(document_id=document_id, file_type=file_type)
@@ -145,15 +153,29 @@ class RAGRetriever:
         # by cosine similarity. It uses an HNSW index (Hierarchical
         # Navigable Small World graph) for approximate nearest-neighbor search.
         # This is much faster than brute-force comparison — O(log n) vs O(n).
-        search_results = await self._qdrant.search(
-            collection_name=self._collection,
-            query_vector=query_vector,
-            limit=top_k,
-            score_threshold=score_threshold,
-            query_filter=qdrant_filter,
-            with_payload=True,   # Include the stored metadata
-            with_vectors=False,  # Don't return vectors (saves bandwidth)
-        )
+        try:
+            search_results = await self._qdrant.search(
+                collection_name=self._collection,
+                query_vector=query_vector,
+                limit=top_k,
+                score_threshold=score_threshold,
+                query_filter=qdrant_filter,
+                with_payload=True,   # Include the stored metadata
+                with_vectors=False,  # Don't return vectors (saves bandwidth)
+            )
+        except Exception as qdrant_err:
+            # CONCEPT: Graceful degradation
+            #   When Qdrant is unreachable (DNS failure, network outage, cluster paused)
+            #   we return an empty list instead of crashing the agent.
+            #   The RAG tool converts this to a "no results" message, and the
+            #   LLM can still answer from its training knowledge.
+            logger.error(
+                "qdrant_search_failed",
+                query=query[:80],
+                error=str(qdrant_err),
+                hint="Check QDRANT_URL / QDRANT_API_KEY in .env or network connectivity",
+            )
+            return []
 
         # ── Step 4: Convert to SearchResult objects ───────────────────────────
         results: list[SearchResult] = []
