@@ -326,6 +326,25 @@ def _add_routers(app: FastAPI) -> None:
     from app.routes import approvals
     app.include_router(approvals.router, prefix=API_PREFIX)
 
+    # Phase 8 routes — Agent-to-Agent (A2A) Protocol
+    from app.routes import a2a
+    app.include_router(a2a.router, prefix=API_PREFIX)
+
+    # ── Well-Known A2A Endpoints (Root Compliance) ───────────────────────────
+    @app.get("/.well-known/agent-card.json", tags=["A2A Protocol"], summary="Root A2A Agent Card")
+    async def root_agent_card(request: Request):
+        """Root compliant endpoint for the A2A Agent Card discovery."""
+        from app.a2a.agent_card import get_agent_card
+        base_url = str(request.base_url).rstrip("/")
+        return get_agent_card(base_url)
+
+    @app.get("/.well-known/agent.json", tags=["A2A Protocol"], summary="Root A2A Agent Card (Alias)")
+    async def root_agent_card_alias(request: Request):
+        """Alias for root A2A Agent Card discovery."""
+        from app.a2a.agent_card import get_agent_card
+        base_url = str(request.base_url).rstrip("/")
+        return get_agent_card(base_url)
+
     # ── Root endpoint ─────────────────────────────────────────────────────────
     @app.get("/", tags=["Root"], summary="API welcome")
     async def root() -> dict:

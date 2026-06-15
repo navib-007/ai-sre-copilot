@@ -44,6 +44,7 @@ CONCEPT: Graceful Degradation
 """
 
 import json
+from typing import Optional, List, Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
@@ -195,7 +196,7 @@ async def _direct_response(user_message: str, state: dict, llm: ChatOpenAI) -> d
 
 # ─── Supervisor Builder ───────────────────────────────────────────────────────
 
-def build_supervisor(db, retriever, session_id: str):
+def build_supervisor(db, retriever, session_id: str, tools: Optional[List[Any]] = None):
     """
     Build the supervisor as a pre-configured async callable.
 
@@ -210,6 +211,7 @@ def build_supervisor(db, retriever, session_id: str):
         db:         AsyncSession bound to this request
         retriever:  RAGRetriever singleton
         session_id: The session ID of the current chat thread
+        tools:      Optional pre-constructed list of tools (e.g. MCP client tools)
 
     Returns:
         An async callable with signature: (state: dict) -> dict
@@ -229,9 +231,9 @@ def build_supervisor(db, retriever, session_id: str):
     # ── Pre-build specialist agents ────────────────────────────────────────────
     # Built once per request (not once per agent call) for efficiency.
     # Each agent captures the same `db` and `retriever` from this closure.
-    rag_agent     = build_rag_agent(retriever=retriever, db=db)
-    ticket_agent  = build_ticket_agent(db=db) if settings.enable_ticket_agent else None
-    incident_agent = build_incident_agent(db=db, retriever=retriever, session_id=session_id) if settings.enable_incident_agent else None
+    rag_agent     = build_rag_agent(retriever=retriever, db=db, tools=tools)
+    ticket_agent  = build_ticket_agent(db=db, tools=tools) if settings.enable_ticket_agent else None
+    incident_agent = build_incident_agent(db=db, retriever=retriever, session_id=session_id, tools=tools) if settings.enable_incident_agent else None
 
     logger.info(
         "supervisor_built",

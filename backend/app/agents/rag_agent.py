@@ -45,6 +45,7 @@ CONCEPT: LangSmith Tracing
   This lets you inspect the full reasoning chain for debugging.
 """
 
+from typing import Optional, List, Any
 from langchain_core.messages import AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -100,7 +101,7 @@ and incidents by searching the knowledge base.
 """
 
 
-def build_rag_agent(retriever, db):
+def build_rag_agent(retriever, db, tools: Optional[List[Any]] = None):
     """
     Build and return a configured RAG LangGraph agent.
 
@@ -123,12 +124,11 @@ def build_rag_agent(retriever, db):
     Args:
         retriever: RAGRetriever instance (wraps Qdrant + embedder)
         db:        AsyncSession for embedding cache
+        tools:     Optional pre-constructed list of tools (e.g. MCP client tools)
 
     Returns:
         A compiled LangGraph CompiledGraph ready to be invoked.
     """
-    from app.tools.rag_tool import build_rag_tool
-
     # ── Step 1: Create the LLM ─────────────────────────────────────────────────
     # CONCEPT: Temperature = 0 for factual/retrieval agents
     #   - Temperature 0.0 = deterministic, consistent answers (good for RAG)
@@ -151,13 +151,19 @@ def build_rag_agent(retriever, db):
         max_tokens=settings.agent_max_tokens,
     )
 
-    # ── Step 2: Create the tools ───────────────────────────────────────────────
-    # The RAG tool wraps our retriever. In Phase 4, we'll add more tools here.
-    from app.tools.memory_tool import build_memory_tools
-    rag_tool = build_rag_tool(retriever=retriever, db=db)
-    tools = [rag_tool] + build_memory_tools(db=db)
+    # ── Step 2: Create or Filter tools ─────────────────────────────────────────
+    if tools is not None:
+        # Filter the dynamic tools list for RAG agent specific needs
+        allowed_names = {"search_knowledge_base", "save_user_preference", "save_environment_fact"}
+        agent_tools = [t for t in tools if t.name in allowed_names]
+    else:
+        # Fall back to local tools builders
+        from app.tools.rag_tool import build_rag_tool
+        from app.tools.memory_tool import build_memory_tools
+        rag_tool = build_rag_tool(retriever=retriever, db=db)
+        agent_tools = [rag_tool] + build_memory_tools(db=db)
 
-    logger.info("rag_agent_tools_configured", tool_names=[t.name for t in tools])
+    logger.info("rag_agent_tools_configured", tool_names=[t.name for t in agent_tools])
 
     # ── Step 3: Format the system prompt ──────────────────────────────────────
     # All values come from settings — no hardcoded strings in code
@@ -179,7 +185,7 @@ def build_rag_agent(retriever, db):
     #   in the LLM call, ensuring consistent behavior across all invocations.
     agent = create_react_agent(
         model=llm,
-        tools=tools,
+        tools=agent_tools,
         state_modifier=SystemMessage(content=system_prompt),
     )
 

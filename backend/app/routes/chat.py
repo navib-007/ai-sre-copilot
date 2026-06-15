@@ -111,66 +111,74 @@ async def chat(
     )
 
     try:
-        # ── Step 1: Build the Supervisor ──────────────────────────────────────
-        # CONCEPT: Per-request supervisor build
-        #   We build the supervisor fresh per request to bind the request-scoped
-        #   DB session. Each specialist agent inside the supervisor shares this
-        #   DB session, ensuring all DB operations are in the same transaction.
+        # ── Step 1: Build & Run Supervisor via MCP tools client ────────────────
+        # CONCEPT: Model Context Protocol (MCP) Client
+        #   We run the supervisor and its specialist agents inside the mcp_tools_client
+        #   context manager. The client automatically starts the MCP tool server as
+        #   a subprocess, discovers its tools dynamically, and wraps them as LangChain tools.
+        #   This decouples tool definitions and execution from the agent logic.
+        from app.mcp.client import mcp_tools_client
         from app.agents.supervisor import build_supervisor, run_supervisor
         from app.agents.state import create_initial_state
 
-        supervisor = build_supervisor(db=db, retriever=retriever, session_id=request.session_id)
+        async with mcp_tools_client(session_id=request.session_id) as mcp_tools:
+            supervisor = build_supervisor(
+                db=db,
+                retriever=retriever,
+                session_id=request.session_id,
+                tools=mcp_tools,
+            )
 
-        # ── Step 1b: Load Memory Context (Phase 5) ────────────────────────────
-        from langchain_core.messages import SystemMessage, HumanMessage
-        from app.memory.short_term import load_short_term_memory
-        from app.memory.long_term import get_memory_entries
-        from app.memory.semantic import search_semantic_memory
-        from app.rag.qdrant_client import get_qdrant_client
-        from app.rag.embedder import get_embedder
+            # ── Step 1b: Load Memory Context (Phase 5) ────────────────────────────
+            from langchain_core.messages import SystemMessage, HumanMessage
+            from app.memory.short_term import load_short_term_memory
+            from app.memory.long_term import get_memory_entries
+            from app.memory.semantic import search_semantic_memory
+            from app.rag.qdrant_client import get_qdrant_client
+            from app.rag.embedder import get_embedder
 
-        qclient = get_qdrant_client()
-        embedder = get_embedder()
+            qclient = get_qdrant_client()
+            embedder = get_embedder()
 
-        # Load short-term history, long-term facts, and semantically similar past Q&A
-        past_messages = await load_short_term_memory(db=db, session_id=request.session_id, limit=10)
-        long_term_entries = await get_memory_entries(db=db, user_id=1)
-        semantic_entries = await search_semantic_memory(
-            qdrant_client=qclient,
-            embedder=embedder,
-            db=db,
-            user_id=1,
-            query=request.message,
-            limit=3,
-        )
+            # Load short-term history, long-term facts, and semantically similar past Q&A
+            past_messages = await load_short_term_memory(db=db, session_id=request.session_id, limit=10)
+            long_term_entries = await get_memory_entries(db=db, user_id=1)
+            semantic_entries = await search_semantic_memory(
+                qdrant_client=qclient,
+                embedder=embedder,
+                db=db,
+                user_id=1,
+                query=request.message,
+                limit=3,
+            )
 
-        # ── Step 2: Create initial state ──────────────────────────────────────
-        initial_state = create_initial_state(
-            user_message=request.message,
-            session_id=request.session_id,
-            user_id=1,  # Real user ID added in Phase 9 (JWT auth)
-        )
+            # ── Step 2: Create initial state ──────────────────────────────────────
+            initial_state = create_initial_state(
+                user_message=request.message,
+                session_id=request.session_id,
+                user_id=1,  # Real user ID added in Phase 9 (JWT auth)
+            )
 
-        # Format memories and prepend to conversation messages
-        memory_text = _format_memory_context(long_term_entries, semantic_entries)
-        initial_messages = []
-        if memory_text:
-            initial_messages.append(SystemMessage(content=memory_text))
-        if past_messages:
-            initial_messages.extend(past_messages)
-        initial_messages.append(HumanMessage(content=request.message))
+            # Format memories and prepend to conversation messages
+            memory_text = _format_memory_context(long_term_entries, semantic_entries)
+            initial_messages = []
+            if memory_text:
+                initial_messages.append(SystemMessage(content=memory_text))
+            if past_messages:
+                initial_messages.extend(past_messages)
+            initial_messages.append(HumanMessage(content=request.message))
 
-        initial_state["messages"] = initial_messages
-        initial_state["memory_context"] = {
-            "long_term": [
-                {"memory_type": e.memory_type, "key": e.key, "value": e.value}
-                for e in long_term_entries
-            ],
-            "semantic": semantic_entries,
-        }
+            initial_state["messages"] = initial_messages
+            initial_state["memory_context"] = {
+                "long_term": [
+                    {"memory_type": e.memory_type, "key": e.key, "value": e.value}
+                    for e in long_term_entries
+                ],
+                "semantic": semantic_entries,
+            }
 
-        # ── Step 3: Run through Supervisor ────────────────────────────────────
-        result_state = await run_supervisor(supervisor=supervisor, state=initial_state)
+            # ── Step 3: Run through Supervisor ────────────────────────────────────
+            result_state = await run_supervisor(supervisor=supervisor, state=initial_state)
 
         # ── Step 4: Persist conversation to SQLite ────────────────────────────
         await _persist_chat_messages(

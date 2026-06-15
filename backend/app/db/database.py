@@ -85,8 +85,8 @@ def create_engine() -> AsyncEngine:
         # pool_pre_ping: Test connection before using it (handles dropped connections)
         pool_pre_ping=True,
         # ── Debugging ────────────────────────────────────────────────────────
-        # echo=True logs every SQL query — useful for learning, disable in production
-        echo=settings.debug,
+        # echo=False explicitly to prevent stdout corruption during MCP server execution
+        echo=False,
     )
 
     logger.info("database_engine_created", url=db_url.split("///")[0])

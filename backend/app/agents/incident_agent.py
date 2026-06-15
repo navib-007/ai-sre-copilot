@@ -41,6 +41,7 @@ CONCEPT: Incident Severity → Investigation Depth
   The LLM decides based on the severity in the system prompt.
 """
 
+from typing import Optional, List, Any
 from langchain_core.messages import AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -131,7 +132,7 @@ Current Platform: {app_name} v{app_version}
 """
 
 
-def build_incident_agent(db, retriever, session_id: str):
+def build_incident_agent(db, retriever, session_id: str, tools: Optional[List[Any]] = None):
     """
     Build the Incident Investigation specialist agent.
 
@@ -147,17 +148,11 @@ def build_incident_agent(db, retriever, session_id: str):
         db:         AsyncSession for database operations
         retriever:  RAGRetriever for knowledge base search
         session_id: The session ID of the current conversation thread
+        tools:      Optional pre-constructed list of tools (e.g. MCP client tools)
 
     Returns:
         Compiled LangGraph ReAct agent graph with database checkpointer.
     """
-    from app.tools.incident_tool import build_incident_tools
-    from app.tools.logs_tool import build_logs_tool
-    from app.tools.metrics_tool import build_metrics_tool
-    from app.tools.rag_tool import build_rag_tool
-    from app.tools.memory_tool import build_memory_tools
-    from app.tools.execute_tool import build_execute_tools
-
     # ── LLM (slightly higher max_tokens for incident reports) ─────────────────
     llm = ChatOpenAI(
         model=settings.llm_model,
@@ -167,28 +162,36 @@ def build_incident_agent(db, retriever, session_id: str):
     )
 
     # ── Tools ─────────────────────────────────────────────────────────────────
-    # CONCEPT: Tool Selection for Incident Investigation
-    #   We give the incident agent a comprehensive tool set:
-    #   - All incident CRUD tools (manage the incident record)
-    #   - Log search (find error messages)
-    #   - Metrics (find resource exhaustion)
-    #   - RAG (look up runbooks for this type of issue)
-    #   - Memory (read/write persistent facts and preferences)
-    #   - Execution (run remediation actions with human-in-the-loop approvals)
-    tools = [
-        *build_incident_tools(db=db),   # 4 incident tools
-        build_logs_tool(),               # 1 log search tool
-        build_metrics_tool(),            # 1 metrics tool
-        build_rag_tool(retriever=retriever, db=db),  # 1 RAG tool
-        *build_memory_tools(db=db),      # 4 memory tools
-        *build_execute_tools(db=db, session_id=session_id),  # 1 execute tool
-    ]
+    if tools is not None:
+        # Filter dynamic tools for incident agent specific needs
+        allowed_names = {
+            "create_incident", "search_incident_history", "update_incident", "get_incident",
+            "search_logs", "query_metrics", "search_knowledge_base",
+            "save_user_preference", "save_environment_fact", "execute_remediation_action"
+        }
+        agent_tools = [t for t in tools if t.name in allowed_names]
+    else:
+        # Fall back to local tools builders
+        from app.tools.incident_tool import build_incident_tools
+        from app.tools.logs_tool import build_logs_tool
+        from app.tools.metrics_tool import build_metrics_tool
+        from app.tools.rag_tool import build_rag_tool
+        from app.tools.memory_tool import build_memory_tools
+        from app.tools.execute_tool import build_execute_tools
+        agent_tools = [
+            *build_incident_tools(db=db),
+            build_logs_tool(),
+            build_metrics_tool(),
+            build_rag_tool(retriever=retriever, db=db),
+            *build_memory_tools(db=db),
+            *build_execute_tools(db=db, session_id=session_id),
+        ]
 
     logger.info(
         "incident_agent_configured",
         model=settings.llm_model,
-        tool_count=len(tools),
-        tool_names=[t.name for t in tools],
+        tool_count=len(agent_tools),
+        tool_names=[t.name for t in agent_tools],
     )
 
     # ── System Prompt ─────────────────────────────────────────────────────────
@@ -206,7 +209,7 @@ def build_incident_agent(db, retriever, session_id: str):
 
     agent = create_react_agent(
         model=llm,
-        tools=tools,
+        tools=agent_tools,
         checkpointer=checkpointer,
         state_modifier=SystemMessage(content=system_prompt),
     )

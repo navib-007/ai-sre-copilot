@@ -164,6 +164,9 @@ class User(Base):
     documents: Mapped[list["Document"]] = relationship(
         "Document", back_populates="uploader"
     )
+    a2a_tasks: Mapped[list["A2ATask"]] = relationship(
+        "A2ATask", back_populates="user"
+    )
 
     def __repr__(self) -> str:
         return f"<User id={self.id} username={self.username!r} role={self.role!r}>"
@@ -724,3 +727,40 @@ class DocumentChunk(Base):
 
     def __repr__(self) -> str:
         return f"<DocumentChunk doc={self.document_id} idx={self.chunk_index} hash={self.chunk_hash[:8]}...>"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TABLE: a2a_tasks
+# ═══════════════════════════════════════════════════════════════════════════════
+class A2ATask(Base):
+    """
+    Represents an incoming task received via the Agent-to-Agent (A2A) protocol.
+    Exposes fields to track lifecycle, input arguments, final output, and session.
+    """
+    __tablename__ = "a2a_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    task_id: Mapped[str] = mapped_column(String(36), unique=True, index=True, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="submitted", nullable=False, index=True
+    )
+    skill_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    input_message: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), default=1, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    # ── Relationships ─────────────────────────────────────────────────────────
+    user: Mapped["User"] = relationship("User", back_populates="a2a_tasks")
+
+    def __repr__(self) -> str:
+        return f"<A2ATask task_id={self.task_id!r} skill={self.skill_id!r} status={self.status!r}>"
