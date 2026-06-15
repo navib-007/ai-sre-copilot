@@ -36,6 +36,7 @@ CONCEPT: Duplicate Detection Strategy
   This prevents ticket sprawl — a common pain point in real IT ops.
 """
 
+from typing import Optional, List, Any
 from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
@@ -93,7 +94,7 @@ Current Platform: {app_name} v{app_version}
 """
 
 
-def build_ticket_agent(db):
+def build_ticket_agent(db, tools: Optional[List[Any]] = None):
     """
     Build the Ticket Management specialist agent.
 
@@ -101,13 +102,12 @@ def build_ticket_agent(db):
     exclusively on ticket-related operations.
 
     Args:
-        db: AsyncSession for database operations
+        db:    AsyncSession for database operations
+        tools: Optional pre-constructed list of tools (e.g. MCP client tools)
 
     Returns:
         Compiled LangGraph ReAct agent graph.
     """
-    from app.tools.ticket_tool import build_ticket_tools
-
     # ── LLM ───────────────────────────────────────────────────────────────────
     llm = ChatOpenAI(
         model=settings.llm_model,
@@ -117,13 +117,20 @@ def build_ticket_agent(db):
     )
 
     # ── Tools ─────────────────────────────────────────────────────────────────
-    from app.tools.memory_tool import build_memory_tools
-    tools = build_ticket_tools(db=db) + build_memory_tools(db=db)
+    if tools is not None:
+        # Filter dynamic tools for ticket agent specific needs
+        allowed_names = {"search_tickets", "create_ticket", "update_ticket", "get_ticket", "save_user_preference", "save_environment_fact"}
+        agent_tools = [t for t in tools if t.name in allowed_names]
+    else:
+        # Fall back to local tools builders
+        from app.tools.ticket_tool import build_ticket_tools
+        from app.tools.memory_tool import build_memory_tools
+        agent_tools = build_ticket_tools(db=db) + build_memory_tools(db=db)
 
     logger.info(
         "ticket_agent_configured",
         model=settings.llm_model,
-        tool_names=[t.name for t in tools],
+        tool_names=[t.name for t in agent_tools],
     )
 
     # ── System Prompt ─────────────────────────────────────────────────────────
@@ -135,7 +142,7 @@ def build_ticket_agent(db):
     # ── Build ReAct Graph ─────────────────────────────────────────────────────
     agent = create_react_agent(
         model=llm,
-        tools=tools,
+        tools=agent_tools,
         state_modifier=SystemMessage(content=system_prompt),
     )
 

@@ -65,3 +65,7 @@ httpx==0.28.1                     # Test client for FastAPI
 rich==13.9.4                      # Beautiful console output
 tenacity==9.0.0                   # Retry logic
 python-dateutil==2.9.0            # Date parsing utilities
+
+# ─── Streamlit Frontend ───────────────────────────────────────────────────────
+streamlit==1.31.1                 # Interactive UI framework
+watchdog==4.0.0                   # File system monitor (essential for Windows development)

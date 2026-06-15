@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.db.models import AuditLog, Ticket, User
 from app.logging_config import get_logger
+from app.auth import require_viewer, require_engineer
 from app.schemas.ticket import (
     TicketCreate,
     TicketListResponse,
@@ -86,6 +87,7 @@ async def list_tickets(
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_viewer),
 ) -> TicketListResponse:
     """
     Retrieve a paginated list of tickets with optional filters.
@@ -161,8 +163,7 @@ async def list_tickets(
 async def create_ticket(
     ticket_data: TicketCreate,         # Pydantic validates the request body
     db: AsyncSession = Depends(get_db),
-    # TODO Phase 9: Replace hardcoded user_id with: user: User = Depends(get_current_user)
-    # For now, we use a default user_id=1 (set up in seed.py)
+    current_user: User = Depends(require_engineer),
 ) -> TicketResponse:
     """
     Create a new support ticket.
@@ -185,7 +186,7 @@ async def create_ticket(
         priority=ticket_data.priority,
         category=ticket_data.category,
         tags=ticket_data.tags,
-        created_by=1,           # Hardcoded until Phase 9 auth
+        created_by=current_user.id,
         status="open",          # Always starts as open
     )
 
@@ -198,7 +199,7 @@ async def create_ticket(
         action="ticket_created",
         resource_type="ticket",
         resource_id=new_ticket.id,
-        user_id=1,
+        user_id=current_user.id,
         details={"title": new_ticket.title, "priority": new_ticket.priority},
     )
 
@@ -212,6 +213,7 @@ async def create_ticket(
 async def get_ticket(
     ticket_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_viewer),
 ) -> TicketResponse:
     """Retrieve a single ticket by its ID."""
     logger.debug("get_ticket_request", ticket_id=ticket_id)
@@ -235,6 +237,7 @@ async def update_ticket(
     ticket_id: int,
     update_data: TicketUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_engineer),
 ) -> TicketResponse:
     """
     Partially update a ticket (PATCH = only provided fields are updated).
@@ -273,7 +276,7 @@ async def update_ticket(
         action="ticket_updated",
         resource_type="ticket",
         resource_id=ticket_id,
-        user_id=1,
+        user_id=current_user.id,
         details=jsonable_encoder(update_fields),
     )
 
@@ -291,6 +294,7 @@ async def update_ticket(
 async def delete_ticket(
     ticket_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_engineer),
 ) -> None:
     """
     Soft-delete a ticket by setting its status to 'closed'.
@@ -318,7 +322,7 @@ async def delete_ticket(
         action="ticket_closed",
         resource_type="ticket",
         resource_id=ticket_id,
-        user_id=1,
+        user_id=current_user.id,
     )
 
     logger.info("ticket_closed", ticket_id=ticket_id)

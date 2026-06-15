@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     algorithm: str = Field(default="HS256")
     access_token_expire_minutes: int = Field(default=60)
     refresh_token_expire_days: int = Field(default=7)
+    a2a_api_key: str = Field(default="a2a-secret-key-123")
 
     # ── OpenAI ────────────────────────────────────────────────────────────────
     openai_api_key: str = Field(default="")

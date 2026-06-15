@@ -38,6 +38,8 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import get_settings
 from app.db.database import close_db, init_db
@@ -45,6 +47,8 @@ from app.db.migrations import run_migrations
 from app.logging_config import get_logger, setup_logging
 from app.routes import incidents, tickets
 from app.schemas.common import HealthResponse
+from app.limiter import limiter
+from app.auth import auth_router
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -100,6 +104,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     qclient = get_qdrant_client()
     await init_semantic_memory_collection(qclient)
     logger.info("qdrant_semantic_memory_ready")
+
+    # Step 2d: Initialize LangGraph checkpointer async connection
+    # get_checkpointer() internally handles entering the context manager and yields the actual
+    # AsyncSqliteSaver database connection instance to store it.
+    from app.db.database import get_checkpointer
+    await get_checkpointer()
+    logger.info("checkpointer_connection_ready")
 
     # Step 3: Seed sample data (idempotent — safe to call every time)
     try:
@@ -170,6 +181,9 @@ Use `POST /api/auth/login` to get a JWT token, then include it as:
         # Return more details in validation error responses
         # This helps during development to understand what went wrong
     )
+
+    app.state.limiter = limiter
+    app.add_middleware(SlowAPIMiddleware)
 
     # ── Middleware ────────────────────────────────────────────────────────────
     _add_middleware(app)
@@ -291,6 +305,18 @@ def _add_exception_handlers(app: FastAPI) -> None:
             },
         )
 
+    @app.exception_handler(RateLimitExceeded)
+    async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "success": False,
+                "error": "Too Many Requests",
+                "detail": f"Rate limit exceeded: {exc.detail}",
+                "request_id": getattr(request.state, "request_id", None),
+            },
+        )
+
 
 def _add_routers(app: FastAPI) -> None:
     """Register all API routers with the /api prefix."""
@@ -303,6 +329,9 @@ def _add_routers(app: FastAPI) -> None:
 
     API_PREFIX = "/api"
 
+    # Phase 9 Auth routes
+    app.include_router(auth_router, prefix=API_PREFIX)
+
     # Phase 1 routes
     app.include_router(tickets.router, prefix=API_PREFIX)
     app.include_router(incidents.router, prefix=API_PREFIX)
@@ -314,6 +343,29 @@ def _add_routers(app: FastAPI) -> None:
     # Phase 3 routes — AI Agent Chat
     from app.routes import chat
     app.include_router(chat.router, prefix=API_PREFIX)
+
+    # Phase 6 routes — Human-in-the-Loop Approvals
+    from app.routes import approvals
+    app.include_router(approvals.router, prefix=API_PREFIX)
+
+    # Phase 8 routes — Agent-to-Agent (A2A) Protocol
+    from app.routes import a2a
+    app.include_router(a2a.router, prefix=API_PREFIX)
+
+    # ── Well-Known A2A Endpoints (Root Compliance) ───────────────────────────
+    @app.get("/.well-known/agent-card.json", tags=["A2A Protocol"], summary="Root A2A Agent Card")
+    async def root_agent_card(request: Request):
+        """Root compliant endpoint for the A2A Agent Card discovery."""
+        from app.a2a.agent_card import get_agent_card
+        base_url = str(request.base_url).rstrip("/")
+        return get_agent_card(base_url)
+
+    @app.get("/.well-known/agent.json", tags=["A2A Protocol"], summary="Root A2A Agent Card (Alias)")
+    async def root_agent_card_alias(request: Request):
+        """Alias for root A2A Agent Card discovery."""
+        from app.a2a.agent_card import get_agent_card
+        base_url = str(request.base_url).rstrip("/")
+        return get_agent_card(base_url)
 
     # ── Root endpoint ─────────────────────────────────────────────────────────
     @app.get("/", tags=["Root"], summary="API welcome")

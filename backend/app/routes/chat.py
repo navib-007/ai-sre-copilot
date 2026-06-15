@@ -47,13 +47,16 @@ import time
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.database import get_db
+from app.db.models import User
 from app.logging_config import get_logger
 from app.schemas.chat import ChatHistoryResponse, ChatRequest, ChatResponse, SourceCitation
+from app.auth import require_engineer
+from app.limiter import limiter
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -86,10 +89,14 @@ def get_retriever_dep():
         "with source citations. "
         "Pass the same `session_id` across requests to maintain conversation context."
     ),)
+@limiter.limit("20/minute")
 async def chat(
-    request: ChatRequest,
+    chat_data: ChatRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    retriever=Depends(get_retriever_dep),) -> ChatResponse:
+    retriever=Depends(get_retriever_dep),
+    current_user: User = Depends(require_engineer),
+) -> ChatResponse:
     """
     Main chat endpoint — routes through the Phase 4 Multi-Agent Supervisor.
 
@@ -105,80 +112,89 @@ async def chat(
     logger.info(
         "chat_request_received",
         request_id=request_id,
-        session_id=request.session_id,
-        message_preview=request.message[:80],
-        agent_override=request.agent_override,
+        session_id=chat_data.session_id,
+        message_preview=chat_data.message[:80],
+        agent_override=chat_data.agent_override,
     )
 
     try:
-        # ── Step 1: Build the Supervisor ──────────────────────────────────────
-        # CONCEPT: Per-request supervisor build
-        #   We build the supervisor fresh per request to bind the request-scoped
-        #   DB session. Each specialist agent inside the supervisor shares this
-        #   DB session, ensuring all DB operations are in the same transaction.
+        # ── Step 1: Build & Run Supervisor via MCP tools client ────────────────
+        # CONCEPT: Model Context Protocol (MCP) Client
+        #   We run the supervisor and its specialist agents inside the mcp_tools_client
+        #   context manager. The client automatically starts the MCP tool server as
+        #   a subprocess, discovers its tools dynamically, and wraps them as LangChain tools.
+        #   This decouples tool definitions and execution from the agent logic.
+        from app.mcp.client import mcp_tools_client
         from app.agents.supervisor import build_supervisor, run_supervisor
         from app.agents.state import create_initial_state
 
-        supervisor = build_supervisor(db=db, retriever=retriever)
+        async with mcp_tools_client(session_id=chat_data.session_id) as mcp_tools:
+            supervisor = build_supervisor(
+                db=db,
+                retriever=retriever,
+                session_id=chat_data.session_id,
+                tools=mcp_tools,
+            )
 
-        # ── Step 1b: Load Memory Context (Phase 5) ────────────────────────────
-        from langchain_core.messages import SystemMessage, HumanMessage
-        from app.memory.short_term import load_short_term_memory
-        from app.memory.long_term import get_memory_entries
-        from app.memory.semantic import search_semantic_memory
-        from app.rag.qdrant_client import get_qdrant_client
-        from app.rag.embedder import get_embedder
+            # ── Step 1b: Load Memory Context (Phase 5) ────────────────────────────
+            from langchain_core.messages import SystemMessage, HumanMessage
+            from app.memory.short_term import load_short_term_memory
+            from app.memory.long_term import get_memory_entries
+            from app.memory.semantic import search_semantic_memory
+            from app.rag.qdrant_client import get_qdrant_client
+            from app.rag.embedder import get_embedder
 
-        qclient = get_qdrant_client()
-        embedder = get_embedder()
+            qclient = get_qdrant_client()
+            embedder = get_embedder()
 
-        # Load short-term history, long-term facts, and semantically similar past Q&A
-        past_messages = await load_short_term_memory(db=db, session_id=request.session_id, limit=10)
-        long_term_entries = await get_memory_entries(db=db, user_id=1)
-        semantic_entries = await search_semantic_memory(
-            qdrant_client=qclient,
-            embedder=embedder,
-            db=db,
-            user_id=1,
-            query=request.message,
-            limit=3,
-        )
+            # Load short-term history, long-term facts, and semantically similar past Q&A
+            past_messages = await load_short_term_memory(db=db, session_id=chat_data.session_id, limit=10)
+            long_term_entries = await get_memory_entries(db=db, user_id=current_user.id)
+            semantic_entries = await search_semantic_memory(
+                qdrant_client=qclient,
+                embedder=embedder,
+                db=db,
+                user_id=current_user.id,
+                query=chat_data.message,
+                limit=3,
+            )
 
-        # ── Step 2: Create initial state ──────────────────────────────────────
-        initial_state = create_initial_state(
-            user_message=request.message,
-            session_id=request.session_id,
-            user_id=1,  # Real user ID added in Phase 9 (JWT auth)
-        )
+            # ── Step 2: Create initial state ──────────────────────────────────────
+            initial_state = create_initial_state(
+                user_message=chat_data.message,
+                session_id=chat_data.session_id,
+                user_id=current_user.id,
+            )
 
-        # Format memories and prepend to conversation messages
-        memory_text = _format_memory_context(long_term_entries, semantic_entries)
-        initial_messages = []
-        if memory_text:
-            initial_messages.append(SystemMessage(content=memory_text))
-        if past_messages:
-            initial_messages.extend(past_messages)
-        initial_messages.append(HumanMessage(content=request.message))
+            # Format memories and prepend to conversation messages
+            memory_text = _format_memory_context(long_term_entries, semantic_entries)
+            initial_messages = []
+            if memory_text:
+                initial_messages.append(SystemMessage(content=memory_text))
+            if past_messages:
+                initial_messages.extend(past_messages)
+            initial_messages.append(HumanMessage(content=chat_data.message))
 
-        initial_state["messages"] = initial_messages
-        initial_state["memory_context"] = {
-            "long_term": [
-                {"memory_type": e.memory_type, "key": e.key, "value": e.value}
-                for e in long_term_entries
-            ],
-            "semantic": semantic_entries,
-        }
+            initial_state["messages"] = initial_messages
+            initial_state["memory_context"] = {
+                "long_term": [
+                    {"memory_type": e.memory_type, "key": e.key, "value": e.value}
+                    for e in long_term_entries
+                ],
+                "semantic": semantic_entries,
+            }
 
-        # ── Step 3: Run through Supervisor ────────────────────────────────────
-        result_state = await run_supervisor(supervisor=supervisor, state=initial_state)
+            # ── Step 3: Run through Supervisor ────────────────────────────────────
+            result_state = await run_supervisor(supervisor=supervisor, state=initial_state)
 
         # ── Step 4: Persist conversation to SQLite ────────────────────────────
         await _persist_chat_messages(
             db=db,
-            session_id=request.session_id,
-            user_message=request.message,
+            session_id=chat_data.session_id,
+            user_message=chat_data.message,
             assistant_response=result_state.get("final_response", ""),
             agent_name=result_state.get("current_agent", "rag_agent"),
+            user_id=current_user.id,
         )
 
         # ── Step 4b: Consolidate Memory (Extract facts & save semantic QA) ─────
@@ -187,9 +203,9 @@ async def chat(
             db=db,
             qdrant_client=qclient,
             embedder=embedder,
-            user_id=1,
-            session_id=request.session_id,
-            user_message=request.message,
+            user_id=current_user.id,
+            session_id=chat_data.session_id,
+            user_message=chat_data.message,
             assistant_response=result_state.get("final_response", ""),
         )
         await db.commit()
@@ -203,7 +219,7 @@ async def chat(
         logger.info(
             "chat_request_complete",
             request_id=request_id,
-            session_id=request.session_id,
+            session_id=chat_data.session_id,
             agent_used=result_state.get("current_agent", "rag_agent"),
             processing_time_ms=processing_time_ms,
             response_length=len(result_state.get("final_response", "")),
@@ -212,7 +228,7 @@ async def chat(
 
         return ChatResponse(
             message=result_state.get("final_response", "No response generated."),
-            session_id=request.session_id,
+            session_id=chat_data.session_id,
             agent_used=result_state.get("current_agent", "rag_agent"),
             intent_detected=result_state.get("intent", "knowledge_query"),
             sources=sources,
@@ -226,7 +242,7 @@ async def chat(
         logger.error(
             "chat_request_failed",
             request_id=request_id,
-            session_id=request.session_id,
+            session_id=chat_data.session_id,
             error=str(e),
             processing_time_ms=processing_time_ms,
             exc_info=True,
@@ -249,9 +265,12 @@ async def chat(
     summary="Get chat history for a session",
     description="Retrieve all messages for a given session ID, ordered chronologically.",
 )
+@limiter.limit("60/minute")
 async def get_chat_history(
     session_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_engineer),
 ) -> ChatHistoryResponse:
     """
     Retrieve the conversation history for a session.
@@ -276,6 +295,13 @@ async def get_chat_history(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No chat session found with ID: {session_id}",
+        )
+
+    # Ownership check
+    if session.user_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this chat history."
         )
 
     # Get all messages for this session, ordered by timestamp
@@ -309,19 +335,23 @@ async def get_chat_history(
     summary="List all chat sessions",
     description="Returns a list of all chat sessions with their last activity timestamps.",
 )
+@limiter.limit("60/minute")
 async def list_sessions(
+    request: Request,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_engineer),
 ) -> dict:
     """List recent chat sessions."""
     from sqlalchemy import select, desc
     from app.db.models import ChatSession
 
-    result = await db.execute(
-        select(ChatSession)
-        .order_by(desc(ChatSession.last_active))
-        .limit(limit)
-    )
+    # Filter sessions by current user unless user is admin
+    stmt = select(ChatSession)
+    if current_user.role != "admin":
+        stmt = stmt.where(ChatSession.user_id == current_user.id)
+    stmt = stmt.order_by(desc(ChatSession.last_active)).limit(limit)
+    result = await db.execute(stmt)
     sessions = result.scalars().all()
 
     return {
@@ -344,7 +374,9 @@ async def _persist_chat_messages(
     session_id: str,
     user_message: str,
     assistant_response: str,
-    agent_name: str,) -> None:
+    agent_name: str,
+    user_id: int,
+) -> None:
     """
     Save user message and assistant response to SQLite.
 
@@ -366,10 +398,9 @@ async def _persist_chat_messages(
         now = datetime.utcnow()
 
         if not session:
-            # Create new session (user_id=1 until Phase 9 auth)
             session = ChatSession(
                 session_id=session_id,
-                user_id=1,
+                user_id=user_id,
                 started_at=now,
                 last_active=now,
             )

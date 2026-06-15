@@ -13,7 +13,8 @@
 | **Phase 3: First Agent** | ✅ Done | LangGraph RAG Agent + `/api/chat` endpoint |
 | **Phase 4: Multi-Agent** | ✅ Done | Supervisor + intent routing + 3 specialist agents |
 | **Phase 5: Memory** | ✅ Done | Three-tier memory system (Short, Long & Semantic) |
-| **Phase 6: HITL** | ⏳ Pending | Human-in-the-loop approvals |
+| **Phase 6: HITL** | ✅ Done | Human-in-the-loop approvals (interrupt/resume) |
+| **Phase 7: MCP** | ⏳ Pending | Model Context Protocol integration |
 
 ---
 
@@ -268,10 +269,106 @@ cmd /c "set PYTHONPATH=.&& ..\venv\Scripts\pytest tests/test_memory.py -v"
 
 ---
 
-## ➡️ Next: Phase 6 — Human-in-the-Loop (Approval Workflow)
+## Phase 6 Tests — Human-in-the-Loop (Approvals)
 
-Phase 6 adds:
-1. **Approval Node** — Pausing the execution graph for high-risk actions using LangGraph `interrupt()`.
-2. **State Persistence** — SQLite-based checkpointers to save graph state across server restarts.
-3. **Approvals Route** — Endpoints to inspect, approve, or reject pending actions.
+The approvals workflow enforces safety barriers on high-risk operations (like `execute_remediation_action`).
+
+### Automated Tests
+Run the pytest suite to verify approvals CRUD, decision endpoints, and execution tool breakpoints:
+```powershell
+cd backend
+cmd /c "set PYTHONPATH=.&& ..\venv\Scripts\pytest tests/test_approvals.py -v"
+```
+
+### Manual Verification Flow
+1. **Trigger Incident & Remediation**:
+   Report a P1 outage to the chat:
+   ```json
+   {"message": "P1 incident: payment-service is down and returning 503s. Investigate and fix.", "session_id": "hitl-test-001"}
+   ```
+   *Expected response*: The Incident Agent creates an incident record, investigates logs/metrics, and identifies that it needs to restart the pod. However, it will return:
+   `"⚠️ CRITICAL: The action 'restart_pod' on target 'payment-service' requires human approval (Request ID: 1)."`
+2. **List Pending Approvals**:
+   Query the approvals queue to check your request:
+   ```bash
+   GET http://localhost:8000/api/approvals/pending
+   ```
+   *Expected response*: A JSON array containing the pending request details with `id=1`.
+3. **Approve the Action**:
+   Approve the action:
+   ```bash
+   POST http://localhost:8000/api/approvals/1/approve
+   Content-Type: application/json
+   {"comment": "Approved by senior SRE"}
+   ```
+4. **Resume and Execute**:
+   Instruct the agent to proceed:
+   ```json
+   {"message": "I have approved Request ID 1. Go ahead and execute the restart.", "session_id": "hitl-test-001"}
+   ```
+   *Expected response*: The Incident Agent loads the checkpoint state, executes the approved restart tool successfully, mitigates the service status, and outputs a final report indicating the issue is resolved.
+
+---
+
+## 🔍 Phase 6 Key Concepts Learned
+
+| Concept | Description | File |
+|---------|-------------|------|
+| **LangGraph Checkpointing** | Async state serialization using `AsyncSqliteSaver` in checkpoints database | `db/database.py` |
+| **Approval Guardrails** | SQLite-backed `ApprovalRequest` registry to verify tool permissions | `tools/execute_tool.py` |
+| **Action Lifespan Context** | Lifespan-scoped context management of persistent connections | `main.py` |
+| **Approvals API** | Endpoints (`GET /approvals/pending`, `POST /approvals/{id}/approve`) for HITL gate reviews | `routes/approvals.py` |
+
+---
+
+## Phase 7 Tests — Model Context Protocol (MCP) Integration
+
+Phase 7 exposes all 14 operational tools via a standardized MCP server and executes them dynamically through an MCP client transport.
+
+### Automated Tests
+Run the pytest suite to verify MCP client-server transport connection, tool discovery, and log search invocation:
+```powershell
+cd backend
+cmd /c "set PYTHONPATH=.&& ..\venv\Scripts\pytest tests/test_mcp.py -v"
+```
+
+To run all automated test suites (Memory, Approvals, MCP):
+```powershell
+cd backend
+cmd /c "set PYTHONPATH=.&& ..\venv\Scripts\pytest -v"
+```
+
+### Manual Verification Flow
+1. **Verifying Dynamic Discovery & Execution**:
+   Start the FastAPI app and trigger any normal chat flow:
+   ```json
+   {"message": "Show me the logs for auth-service matching keyword timeout", "session_id": "mcp-test-001"}
+   ```
+   *Expected response*: The supervisor correctly routes to the Incident Agent, which connects over the MCP client to call `search_logs` on the MCP server subprocess, returning formatted simulated logs.
+
+2. **Standalone SSE Server Mode**:
+   Start the MCP server as a standalone SSE HTTP server on port `8010`:
+   ```powershell
+   cd backend
+   ..\venv\Scripts\python -m app.mcp.server --transport sse --port 8010
+   ```
+   This allows external tools/agents (e.g. Claude Desktop) to connect directly to the system tools by configuring their config file.
+
+---
+
+## 🔍 Phase 7 Key Concepts Learned
+
+| Concept | Description | File |
+|---------|-------------|------|
+| **FastMCP Server** | High-level API for creating MCP servers and declaring Python functions as tools | `mcp/server.py` |
+| **Stdio Transport** | Process-based tool execution where client spawns server subprocess and streams JSON-RPC | `mcp/client.py` |
+| **SSE Transport** | HTTP/Server-Sent Events server allowing remote tool access on port `8010` | `mcp/server.py` |
+| **Dynamic Schema Mapping** | Translating MCP JSON-Schema definitions into Pydantic models at runtime | `mcp/client.py` |
+| **Decoupled Tool Execution** | Decoupling agent definitions and state from DB sessions and local code bindings | `routes/chat.py` |
+
+---
+
+## ➡️ Next: Phase 8 — Agent-to-Agent (A2A) Protocol
+
+
 

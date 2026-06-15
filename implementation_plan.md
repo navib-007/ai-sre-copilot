@@ -375,6 +375,20 @@ erDiagram
         datetime timestamp
     }
     
+    A2ATask {
+        int id PK
+        string task_id UK
+        string status "submitted|working|input-required|completed|failed|canceled"
+        string skill_id
+        string input_message
+        string result
+        string error
+        string session_id
+        int user_id FK
+        datetime created_at
+        datetime updated_at
+    }
+    
     User ||--o{ Ticket : creates
     User ||--o{ Incident : reports
     User ||--o{ ChatSession : owns
@@ -383,6 +397,7 @@ erDiagram
     Incident ||--o{ ApprovalRequest : triggers
     User ||--o{ MemoryEntry : has
     User ||--o{ AuditLog : generates
+    User ||--o{ A2ATask : triggers
 ```
 
 ### LangGraph Agent Architecture
@@ -881,15 +896,18 @@ sequenceDiagram
 ---
 
 ### Phase 8: A2A Protocol
-**Concepts**: Agent-to-Agent communication, Agent Cards, task lifecycle
+**Concepts**: Agent-to-Agent communication (A2A open standard), Agent Cards (discovery metadata), JSON-RPC 2.0 protocol, task lifecycle tracking.
 
 | Step | File | What You'll Build |
 |------|------|-------------------|
-| 8.1 | `app/a2a/agent_card.py` | Agent Card JSON + discovery endpoint |
-| 8.2 | `app/a2a/task_manager.py` | Task state machine (submitted → working → completed) |
-| 8.3 | `app/a2a/protocol.py` | A2A message format + task routing |
+| 8.1 | [agent_card.py](file:///d:/GenAI/AgenticAI%20Project/backend/app/a2a/agent_card.py) | Exposes `/.well-known/agent-card.json` (and alias `/.well-known/agent.json`) metadata describing our agent's skills (`investigate_incident`, `manage_tickets`, `search_runbooks`), version, URL, and security configurations. |
+| 8.2 | [task_manager.py](file:///d:/GenAI/AgenticAI%20Project/backend/app/a2a/task_manager.py) | Manage task lifecycle transitions (`submitted` → `working` → `input-required`/`completed`/`failed`/`canceled`) and background execution orchestrator using database persistence. |
+| 8.3 | [protocol.py](file:///d:/GenAI/AgenticAI%20Project/backend/app/a2a/protocol.py) | A2A JSON-RPC 2.0 message handler. Implements `message/send` (initiating task and starting supervisor as background thread), `tasks/get` (retrieving task status/results), and `tasks/cancel`. |
+| 8.4 | [models.py](file:///d:/GenAI/AgenticAI%20Project/backend/app/db/models.py) update | Add `A2ATask` database model to persist task statuses, inputs, outputs, errors, and session associations. |
+| 8.5 | [routes/a2a.py](file:///d:/GenAI/AgenticAI%20Project/backend/app/routes/a2a.py) | A2A routes for JSON-RPC and well-known endpoints mounted on FastAPI. |
+| 8.6 | [test_a2a.py](file:///d:/GenAI/AgenticAI%20Project/backend/tests/test_a2a.py) | Integration tests to verify agent discovery, task submission, background processing, and retrieval. |
 
-**Milestone**: External agents can discover our agent's capabilities and send it tasks.
+**Milestone**: External agents can query our Agent Card, discover capabilities, delegate an incident investigation or ticket task, monitor its progress asynchronously, and receive the finalized response.
 
 ---
 
@@ -980,6 +998,14 @@ LangSmith provides excellent agent tracing/debugging. Do you want to set it up?
 
 ### 5. Python Version
 What Python version do you have installed? We need 3.11+ for best compatibility.
+
+### 6. Phase 8: A2A Task Polling vs. Streaming
+To track delegated task updates, the A2A spec supports both polling (`tasks/get`) and real-time streaming (SSE/Websockets).
+- **Recommendation**: Implement asynchronous polling via the standard `tasks/get` JSON-RPC method first, persisting task states in the DB. This is simple, robust, and matches the DB task tracking setup.
+
+### 7. Phase 8: Authentication for A2A Endpoints
+A2A endpoints can be left unauthenticated for local development and learning, or require simple API Key validation.
+- **Recommendation**: Keep A2A endpoints unauthenticated for local test calls first (consistent with other routes currently), then secure them in Phase 9 alongside general production auth hardening.
 
 ---
 

@@ -85,8 +85,8 @@ def create_engine() -> AsyncEngine:
         # pool_pre_ping: Test connection before using it (handles dropped connections)
         pool_pre_ping=True,
         # ── Debugging ────────────────────────────────────────────────────────
-        # echo=True logs every SQL query — useful for learning, disable in production
-        echo=settings.debug,
+        # echo=False explicitly to prevent stdout corruption during MCP server execution
+        echo=False,
     )
 
     logger.info("database_engine_created", url=db_url.split("///")[0])
@@ -170,7 +170,64 @@ async def init_db() -> None:
     logger.info("database_tables_created")
 
 
+# ─── LangGraph Checkpointer Persistence ──────────────────────────────────────────
+# We use two variables:
+# 1. _checkpointer_context: Stores the async context manager returned by from_conn_string().
+# 2. _checkpointer_instance: Stores the actual active AsyncSqliteSaver instance yielded
+#    when the context manager is entered.
+_checkpointer_context = None
+_checkpointer_instance = None
+
+
+async def get_checkpointer():
+    """
+    Get the LangGraph AsyncSqliteSaver checkpointer connection instance singleton.
+    This manages agent state checkpointer persistence in data/checkpoints.db.
+    Entering the async context manager yields the actual saver instance which is stored
+    locally and returned for agent runtime execution.
+    """
+    global _checkpointer_context, _checkpointer_instance
+    if _checkpointer_instance is None:
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        import os
+
+        db_dir = settings.data_dir
+        os.makedirs(db_dir, exist_ok=True)
+        checkpoint_db_path = db_dir / "checkpoints.db"
+        logger.info("checkpointer_database_path", path=str(checkpoint_db_path.resolve()))
+        
+        # Instantiate the async generator context manager
+        _checkpointer_context = AsyncSqliteSaver.from_conn_string(str(checkpoint_db_path.resolve()))
+        # Enter the context manager to obtain the actual AsyncSqliteSaver database connection instance
+        _checkpointer_instance = await _checkpointer_context.__aenter__()
+        logger.info("checkpointer_entered_successfully", instance_id=id(_checkpointer_instance))
+        
+    return _checkpointer_instance
+
+
+def get_checkpointer_sync():
+    """
+    Get the LangGraph checkpointer synchronously.
+    Requires checkpointer to have been initialized during startup lifespan.
+    This returns the actual AsyncSqliteSaver database connection instance.
+    """
+    global _checkpointer_instance
+    return _checkpointer_instance
+
+
 async def close_db() -> None:
     """Dispose the engine connection pool. Called at application shutdown."""
     await engine.dispose()
     logger.info("database_engine_disposed")
+
+    global _checkpointer_context, _checkpointer_instance
+    if _checkpointer_context is not None:
+        try:
+            # Properly exit the context manager to close the SQLite connection cleanly
+            await _checkpointer_context.__aexit__(None, None, None)
+            logger.info("checkpointer_connection_closed")
+        except Exception as e:
+            logger.warning("checkpointer_connection_close_failed", error=str(e))
+        _checkpointer_context = None
+        _checkpointer_instance = None
+
