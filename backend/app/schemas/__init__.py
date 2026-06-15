@@ -1,4 +1,11 @@
 from app.schemas.common import ErrorResponse, HealthResponse, SuccessResponse
+from app.schemas.auth import (
+    UserRegister,
+    UserLogin,
+    TokenResponse,
+    TokenRefresh,
+    UserResponse,
+)
 from app.schemas.document import (
     CacheStatsResponse,
     DocumentListResponse,
@@ -27,6 +34,12 @@ __all__ = [
     "SuccessResponse",
     "ErrorResponse",
     "HealthResponse",
+    # Auth
+    "UserRegister",
+    "UserLogin",
+    "TokenResponse",
+    "TokenRefresh",
+    "UserResponse",
     # Document & RAG
     "DocumentResponse",
     "DocumentListResponse",

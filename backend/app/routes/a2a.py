@@ -8,17 +8,37 @@ CONCEPT: A2A Endpoint Expose
     - POST /api/a2a/rpc                         -> JSON-RPC endpoint
 """
 
-from fastapi import APIRouter, Depends, Request, Body
+from fastapi import APIRouter, Depends, Request, Body, HTTPException, Security, status
+from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.a2a.agent_card import get_agent_card, AgentCardModel
 from app.a2a.protocol import handle_a2a_request
 from app.db.database import get_db, AsyncSessionLocal
 from app.logging_config import get_logger
+from app.config import settings
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/a2a", tags=["A2A Protocol"])
+
+a2a_key_header = APIKeyHeader(name="X-A2A-API-Key", auto_error=False)
+
+def verify_a2a_api_key(
+    api_key: str | None = Security(a2a_key_header),
+) -> str:
+    """Verify the specialized A2A machine-to-machine API Key."""
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing A2A API Key",
+        )
+    if api_key != settings.a2a_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid A2A API Key",
+        )
+    return api_key
 
 
 @router.get("/.well-known/agent-card.json", response_model=AgentCardModel, summary="Retrieve A2A Agent Card")
@@ -86,7 +106,8 @@ async def a2a_rpc(
             }
         ]
     ),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    api_key: str = Depends(verify_a2a_api_key),
 ) -> dict:
     """
     Endpoint for A2A JSON-RPC communication (message/send, tasks/get, tasks/cancel).

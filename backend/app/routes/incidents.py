@@ -9,8 +9,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
-from app.db.models import AuditLog, Incident
+from app.db.models import AuditLog, Incident, User
 from app.logging_config import get_logger
+from app.auth import require_viewer, require_engineer
 from app.schemas.incident import (
     IncidentCreate,
     IncidentListResponse,
@@ -23,11 +24,11 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
 
 
-async def _audit(db: AsyncSession, action: str, resource_id: int, details: dict | None = None) -> None:
+async def _audit(db: AsyncSession, action: str, resource_id: int, user_id: int, details: dict | None = None) -> None:
     """Helper to record audit logs for incident operations."""
     import json
     db.add(AuditLog(
-        user_id=1,
+        user_id=user_id,
         action=action,
         resource_type="incident",
         resource_id=resource_id,
@@ -43,6 +44,7 @@ async def list_incidents(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_viewer),
 ) -> IncidentListResponse:
     """List incidents with optional severity and status filters."""
     logger.info("list_incidents_request", severity=severity, status=status, page=page)
@@ -87,6 +89,7 @@ async def list_incidents(
 async def create_incident(
     incident_data: IncidentCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_engineer),
 ) -> IncidentResponse:
     """Report a new incident."""
     logger.info(
@@ -100,13 +103,13 @@ async def create_incident(
         description=incident_data.description,
         severity=incident_data.severity,
         affected_services=incident_data.affected_services,
-        reported_by=1,
+        reported_by=current_user.id,
         status="detected",
     )
     db.add(new_incident)
     await db.flush()
 
-    await _audit(db, "incident_created", new_incident.id, {
+    await _audit(db, "incident_created", new_incident.id, current_user.id, {
         "title": new_incident.title,
         "severity": new_incident.severity,
     })
@@ -120,6 +123,7 @@ async def create_incident(
 async def get_incident(
     incident_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_viewer),
 ) -> IncidentResponse:
     """Retrieve a specific incident by ID."""
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
@@ -141,6 +145,7 @@ async def update_incident(
     incident_id: int,
     update_data: IncidentUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_engineer),
 ) -> IncidentResponse:
     """Update incident status, root cause, or other fields."""
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
@@ -165,7 +170,7 @@ async def update_incident(
     for field, value in update_fields.items():
         setattr(incident, field, value)
 
-    await _audit(db, "incident_updated", incident_id, update_fields)
+    await _audit(db, "incident_updated", incident_id, current_user.id, update_fields)
     logger.info("incident_updated", incident_id=incident_id, fields=list(update_fields.keys()))
 
     return IncidentResponse.model_validate(incident)

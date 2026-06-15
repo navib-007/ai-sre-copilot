@@ -38,6 +38,8 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import get_settings
 from app.db.database import close_db, init_db
@@ -45,6 +47,8 @@ from app.db.migrations import run_migrations
 from app.logging_config import get_logger, setup_logging
 from app.routes import incidents, tickets
 from app.schemas.common import HealthResponse
+from app.limiter import limiter
+from app.auth import auth_router
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -178,6 +182,9 @@ Use `POST /api/auth/login` to get a JWT token, then include it as:
         # This helps during development to understand what went wrong
     )
 
+    app.state.limiter = limiter
+    app.add_middleware(SlowAPIMiddleware)
+
     # ── Middleware ────────────────────────────────────────────────────────────
     _add_middleware(app)
 
@@ -298,6 +305,18 @@ def _add_exception_handlers(app: FastAPI) -> None:
             },
         )
 
+    @app.exception_handler(RateLimitExceeded)
+    async def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "success": False,
+                "error": "Too Many Requests",
+                "detail": f"Rate limit exceeded: {exc.detail}",
+                "request_id": getattr(request.state, "request_id", None),
+            },
+        )
+
 
 def _add_routers(app: FastAPI) -> None:
     """Register all API routers with the /api prefix."""
@@ -309,6 +328,9 @@ def _add_routers(app: FastAPI) -> None:
     #   - Serve static files at / without conflicting with API
 
     API_PREFIX = "/api"
+
+    # Phase 9 Auth routes
+    app.include_router(auth_router, prefix=API_PREFIX)
 
     # Phase 1 routes
     app.include_router(tickets.router, prefix=API_PREFIX)

@@ -42,8 +42,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
-from app.db.models import Document
+from app.db.models import Document, User
 from app.logging_config import get_logger
+from app.auth import require_viewer, require_admin
 from app.rag.embedder import get_embedder
 from app.rag.ingestion import IngestionPipeline
 from app.rag.qdrant_client import get_ingestion_pipeline, get_retriever
@@ -78,6 +79,7 @@ async def upload_document(
     file: UploadFile = File(..., description="Document to upload (txt, md, pdf, docx)"),
     db: AsyncSession = Depends(get_db),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
+    current_user: User = Depends(require_admin),
 ) -> IngestionResult:
     """
     Upload a document and ingest it into the RAG knowledge base.
@@ -126,7 +128,7 @@ async def upload_document(
         file_bytes=file_bytes,
         filename=file.filename,
         file_type=file_ext.lstrip("."),
-        uploaded_by=1,  # TODO Phase 9: use authenticated user
+        uploaded_by=current_user.id,
         db=db,
     )
 
@@ -139,6 +141,7 @@ async def list_documents(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_viewer),
 ) -> DocumentListResponse:
     """List all ingested documents with their metadata."""
     total = (await db.execute(select(func.count(Document.id)))).scalar_one()
@@ -162,6 +165,7 @@ async def list_documents(
 async def get_document(
     document_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_viewer),
 ) -> DocumentResponse:
     """Retrieve metadata for a specific document."""
     result = await db.execute(select(Document).where(Document.id == document_id))
@@ -181,6 +185,7 @@ async def delete_document(
     document_id: int,
     db: AsyncSession = Depends(get_db),
     pipeline: IngestionPipeline = Depends(get_ingestion_pipeline),
+    current_user: User = Depends(require_admin),
 ) -> None:
     """
     Delete a document and permanently remove its vectors from Qdrant.
@@ -205,6 +210,7 @@ async def search_documents(
     request: SearchRequest,
     db: AsyncSession = Depends(get_db),
     retriever: RAGRetriever = Depends(get_retriever),
+    current_user: User = Depends(require_viewer),
 ) -> SearchResponse:
     """
     Search the knowledge base using semantic similarity.
@@ -251,7 +257,7 @@ async def search_documents(
     response_model=CacheStatsResponse,
     summary="Embedding cache statistics",
 )
-async def get_cache_stats() -> CacheStatsResponse:
+async def get_cache_stats(current_user: User = Depends(require_admin)) -> CacheStatsResponse:
     """
     Get embedding cache statistics.
 
@@ -274,7 +280,7 @@ async def get_cache_stats() -> CacheStatsResponse:
     "/cache/clear",
     summary="Clear in-memory embedding cache (L1)",
 )
-async def clear_memory_cache() -> dict:
+async def clear_memory_cache(current_user: User = Depends(require_admin)) -> dict:
     """
     Clear the in-memory (L1) embedding cache.
 
