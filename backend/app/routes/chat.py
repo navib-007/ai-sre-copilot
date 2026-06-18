@@ -117,6 +117,29 @@ async def chat(
         agent_override=chat_data.agent_override,
     )
 
+    # ── Input Guardrails Check ────────────────────────────────────────────
+    from app.security.guardrails import check_input_guardrails
+    guardrails_result = await check_input_guardrails(chat_data.message)
+    if guardrails_result.blocked:
+        processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logger.warning(
+            "chat_request_blocked_by_guardrails",
+            request_id=request_id,
+            session_id=chat_data.session_id,
+            reason=guardrails_result.message,
+            processing_time_ms=processing_time_ms,
+        )
+        return ChatResponse(
+            message=guardrails_result.message,
+            session_id=chat_data.session_id,
+            agent_used="nemo_guardrails",
+            intent_detected="blocked",
+            sources=[],
+            processing_time_ms=processing_time_ms,
+            timestamp=datetime.utcnow(),
+            error=guardrails_result.error_message,
+        )
+
     try:
         # ── Step 1: Build & Run Supervisor via MCP tools client ────────────────
         # CONCEPT: Model Context Protocol (MCP) Client

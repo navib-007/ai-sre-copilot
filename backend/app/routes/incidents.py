@@ -27,12 +27,21 @@ router = APIRouter(prefix="/incidents", tags=["Incidents"])
 async def _audit(db: AsyncSession, action: str, resource_id: int, user_id: int, details: dict | None = None) -> None:
     """Helper to record audit logs for incident operations."""
     import json
+    serializable_details = None
+    if details:
+        serializable_details = {}
+        for k, v in details.items():
+            if hasattr(v, "isoformat"):
+                serializable_details[k] = v.isoformat()
+            else:
+                serializable_details[k] = v
+
     db.add(AuditLog(
         user_id=user_id,
         action=action,
         resource_type="incident",
         resource_id=resource_id,
-        details_json=json.dumps(details) if details else None,
+        details_json=json.dumps(serializable_details) if serializable_details else None,
     ))
 
 

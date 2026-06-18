@@ -80,7 +80,10 @@ def create_engine() -> AsyncEngine:
     engine = create_async_engine(
         db_url,
         # ── SQLite-specific settings ──────────────────────────────────────────
-        connect_args={"check_same_thread": False} if "sqlite" in db_url else {},
+        connect_args={
+            "check_same_thread": False,
+            "timeout": 30,  # 30 seconds busy timeout to wait for locks to clear
+        } if "sqlite" in db_url else {},
         # ── Connection pool settings ──────────────────────────────────────────
         # pool_pre_ping: Test connection before using it (handles dropped connections)
         pool_pre_ping=True,
@@ -88,6 +91,17 @@ def create_engine() -> AsyncEngine:
         # echo=False explicitly to prevent stdout corruption during MCP server execution
         echo=False,
     )
+
+    # Listen to connection events on the sync engine underneath the async engine to set WAL mode
+    if "sqlite" in db_url:
+        from sqlalchemy import event
+        @event.listens_for(engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA synchronous=NORMAL;")
+            cursor.close()
+        logger.info("database_sqlite_pragmas_registered")
 
     logger.info("database_engine_created", url=db_url.split("///")[0])
     return engine
@@ -200,6 +214,17 @@ async def get_checkpointer():
         _checkpointer_context = AsyncSqliteSaver.from_conn_string(str(checkpoint_db_path.resolve()))
         # Enter the context manager to obtain the actual AsyncSqliteSaver database connection instance
         _checkpointer_instance = await _checkpointer_context.__aenter__()
+        
+        # Configure SQLite pragmas to prevent database locks
+        try:
+            await _checkpointer_instance.conn.execute("PRAGMA journal_mode=WAL;")
+            await _checkpointer_instance.conn.execute("PRAGMA synchronous=NORMAL;")
+            await _checkpointer_instance.conn.execute("PRAGMA busy_timeout=30000;")
+            await _checkpointer_instance.conn.commit()
+            logger.info("checkpointer_pragmas_configured")
+        except Exception as pe:
+            logger.warning("checkpointer_pragmas_failed", error=str(pe))
+            
         logger.info("checkpointer_entered_successfully", instance_id=id(_checkpointer_instance))
         
     return _checkpointer_instance

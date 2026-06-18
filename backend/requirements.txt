@@ -69,3 +69,5 @@ python-dateutil==2.9.0            # Date parsing utilities
 # ─── Streamlit Frontend ───────────────────────────────────────────────────────
 streamlit==1.31.1                 # Interactive UI framework
 watchdog==4.0.0                   # File system monitor (essential for Windows development)
+nemoguardrails==0.22.0             # NeMo Guardrails for input data validation
+

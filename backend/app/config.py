@@ -136,6 +136,14 @@ class Settings(BaseSettings):
         default=True,
         description="Enable the Incident Investigation specialist agent.",
     )
+    enable_guardrails: bool = Field(
+        default=True,
+        description="Enable NeMo Guardrails for input data validation.",
+    )
+    guardrails_config_path: str = Field(
+        default="app/security/guardrails_config",
+        description="Path to NeMo Guardrails configuration directory.",
+    )
 
 
     # ── Logging ───────────────────────────────────────────────────────────────

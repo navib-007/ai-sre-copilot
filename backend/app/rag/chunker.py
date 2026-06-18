@@ -78,17 +78,17 @@ class DocumentChunker:
 
     def __init__(
         self,
-        chunk_size: int = 800,      # Target token count per chunk
-        chunk_overlap: int = 150,   # Overlap tokens between adjacent chunks
+        chunk_size: int = 250,      # Target token count per chunk
+        chunk_overlap: int = 50,    # Overlap tokens between adjacent chunks
         model_name: str = "cl100k_base",  # Tokenizer for GPT-4/OpenAI models
     ):
         """
         Args:
             chunk_size:    Target size of each chunk in TOKENS (not characters).
-                           800 tokens ≈ 600 words ≈ 4KB text — a good balance.
+                           250 tokens — a good balance.
                            Too small: loses context. Too large: loses precision.
             chunk_overlap: How many tokens overlap between consecutive chunks.
-                           150 ≈ 1-2 paragraphs of overlap. Prevents context loss.
+                           50 tokens of overlap. Prevents context loss.
             model_name:    Tiktoken tokenizer (cl100k_base = GPT-4/text-embedding-3).
         """
         self.chunk_size = chunk_size
@@ -132,38 +132,193 @@ class DocumentChunker:
         """Count the number of tokens in a text string using tiktoken."""
         return len(self._tokenizer.encode(text, disallowed_special=()))
 
-    def chunk_text(
+    def _split_by_sentences(self, text: str) -> list[str]:
+        """Split text into sentence-aligned chunks of at most chunk_size tokens."""
+        import re
+        sentence_ends = re.compile(r'(?<=[.?!])\s+|\n+')
+        sentences = [s.strip() for s in sentence_ends.split(text) if s.strip()]
+        
+        raw_chunks = []
+        current_chunk = []
+        current_tokens = 0
+        
+        for sentence in sentences:
+            s_tokens = self._count_tokens(sentence)
+            if current_tokens + s_tokens > self.chunk_size and current_chunk:
+                raw_chunks.append(" ".join(current_chunk))
+                # Apply overlap: prepend sentences from end of current chunk
+                overlap_sentences = []
+                overlap_tokens = 0
+                for s in reversed(current_chunk):
+                    overlap_s_tokens = self._count_tokens(s)
+                    if overlap_tokens + overlap_s_tokens <= self.chunk_overlap:
+                        overlap_sentences.insert(0, s)
+                        overlap_tokens += overlap_s_tokens
+                    else:
+                        break
+                current_chunk = overlap_sentences
+                current_tokens = overlap_tokens
+            
+            current_chunk.append(sentence)
+            current_tokens += s_tokens
+            
+        if current_chunk:
+            raw_chunks.append(" ".join(current_chunk))
+            
+        return raw_chunks
+
+    async def chunk_text(
         self,
         text: str,
         filename: str = "unknown",
         extra_metadata: dict | None = None,
+        db = None,
     ) -> list[Chunk]:
         """
         Split a text string into chunks optimized for embedding.
-
-        Args:
-            text:           Full text to chunk (already extracted from PDF/MD/TXT)
-            filename:       Source filename (stored in chunk metadata)
-            extra_metadata: Additional metadata to attach to every chunk
-
-        Returns:
-            List of Chunk objects, ordered by their position in the document.
+        Uses Semantic Chunking if db session and CachedEmbedder are available.
+        Otherwise falls back to standard RecursiveCharacterTextSplitter.
         """
         if not text or not text.strip():
             logger.warning("chunker_empty_text", filename=filename)
             return []
 
-        # Pre-process: normalize whitespace
         text = text.strip()
+        raw_chunks = []
 
-        # Split into raw text pieces
-        raw_chunks = self._splitter.split_text(text)
+        # Try Semantic Chunking
+        if db is not None:
+            try:
+                from langchain_experimental.text_splitter import SemanticChunker
+                from langchain_core.embeddings import Embeddings
+                import asyncio
+                import threading
+
+                class LangChainEmbeddingsWrapper(Embeddings):
+                    def __init__(self, cached_embedder, db_session):
+                        self.cached_embedder = cached_embedder
+                        self.db_session = db_session
+
+                    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                        if not texts:
+                            return []
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+
+                        if loop.is_running():
+                            result = []
+                            exception = None
+                            def run():
+                                nonlocal result, exception
+                                try:
+                                    new_loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(new_loop)
+                                    result = new_loop.run_until_complete(
+                                        self.cached_embedder.embed_batch(texts, self.db_session)
+                                    )
+                                except Exception as e:
+                                    exception = e
+                            t = threading.Thread(target=run)
+                            t.start()
+                            t.join()
+                            if exception:
+                                raise exception
+                            return result
+                        else:
+                            return loop.run_until_complete(
+                                self.cached_embedder.embed_batch(texts, self.db_session)
+                            )
+
+                    def embed_query(self, text: str) -> list[float]:
+                        return self.embed_documents([text])[0]
+
+                from app.rag.embedder import get_embedder
+                embedder = get_embedder()
+                embeddings_wrapper = LangChainEmbeddingsWrapper(embedder, db)
+
+                # Instantiate langchain_experimental SemanticChunker
+                splitter = SemanticChunker(
+                    embeddings=embeddings_wrapper,
+                    breakpoint_threshold_type="percentile",
+                    breakpoint_threshold_amount=0.7,
+                )
+
+                # Semantic chunking from LangChain
+                semantic_raw_chunks = splitter.split_text(text)
+
+                # Check if it grouped everything into a single chunk despite being large
+                total_tokens = self._count_tokens(text)
+                if len(semantic_raw_chunks) <= 1 and total_tokens > self.chunk_size:
+                    logger.info("semantic_chunker_single_chunk_fallback", filename=filename)
+                    raw_chunks = self._split_by_sentences(text)
+                else:
+                    # Post-process: pack small semantic chunks together and split oversized ones
+                    raw_chunks = []
+                    current_chunk_txts = []
+                    current_chunk_tokens = 0
+                    
+                    for chunk_txt in semantic_raw_chunks:
+                        tokens = self._count_tokens(chunk_txt)
+                        
+                        if tokens > self.chunk_size:
+                            # Oversized chunk: flush any accumulated small chunks first
+                            if current_chunk_txts:
+                                raw_chunks.append(" ".join(current_chunk_txts))
+                                current_chunk_txts = []
+                                current_chunk_tokens = 0
+                            # Split the oversized chunk
+                            sub_chunks = self._split_by_sentences(chunk_txt)
+                            raw_chunks.extend(sub_chunks)
+                        elif current_chunk_tokens + tokens <= self.chunk_size:
+                            # Fits in the current chunk, accumulate it
+                            current_chunk_txts.append(chunk_txt)
+                            current_chunk_tokens += tokens
+                        else:
+                            # Exceeds size: flush current accumulated chunk and start new one with overlap
+                            raw_chunks.append(" ".join(current_chunk_txts))
+                            
+                            # Keep trailing sentences/sub-chunks for overlap
+                            overlap_txts = []
+                            overlap_tokens = 0
+                            for t in reversed(current_chunk_txts):
+                                t_tokens = self._count_tokens(t)
+                                if overlap_tokens + t_tokens <= self.chunk_overlap:
+                                    overlap_txts.insert(0, t)
+                                    overlap_tokens += t_tokens
+                                else:
+                                    break
+                            current_chunk_txts = overlap_txts + [chunk_txt]
+                            current_chunk_tokens = overlap_tokens + tokens
+                            
+                    if current_chunk_txts:
+                        raw_chunks.append(" ".join(current_chunk_txts))
+
+                logger.info(
+                    "semantic_chunking_success",
+                    filename=filename,
+                    chunks_count=len(raw_chunks),
+                )
+            except Exception as e:
+                logger.warning(
+                    "semantic_chunking_failed_fallback",
+                    filename=filename,
+                    error=str(e),
+                )
+                raw_chunks = []
+
+        # Fallback to Recursive Character Splitting if Semantic Chunking was not run or failed
+        if not raw_chunks:
+            logger.info("using_recursive_character_splitter", filename=filename)
+            raw_chunks = self._splitter.split_text(text)
 
         chunks: list[Chunk] = []
         for idx, chunk_text in enumerate(raw_chunks):
             chunk_text = chunk_text.strip()
             if not chunk_text:
-                continue  # Skip empty chunks (can happen after stripping)
+                continue
 
             token_count = self._count_tokens(chunk_text)
 
@@ -192,12 +347,13 @@ class DocumentChunker:
 
         return chunks
 
-    def chunk_file_content(
+    async def chunk_file_content(
         self,
         file_bytes: bytes,
         filename: str,
         file_type: str,
         extra_metadata: dict | None = None,
+        db = None,
     ) -> list[Chunk]:
         """
         Extract text from a file and chunk it.
@@ -210,7 +366,7 @@ class DocumentChunker:
             file_type:  "txt", "md", "pdf", "docx"
         """
         text = self._extract_text(file_bytes, filename, file_type)
-        return self.chunk_text(text, filename=filename, extra_metadata=extra_metadata)
+        return await self.chunk_text(text, filename=filename, extra_metadata=extra_metadata, db=db)
 
     def _extract_text(self, file_bytes: bytes, filename: str, file_type: str) -> str:
         """

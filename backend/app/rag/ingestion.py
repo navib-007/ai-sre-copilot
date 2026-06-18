@@ -216,11 +216,12 @@ class IngestionPipeline:
         logger.info("document_record_created", doc_id=document.id, filename=filename)
 
         # ── Step 4: Parse + Chunk the document ───────────────────────────────
-        chunks = self._chunker.chunk_file_content(
+        chunks = await self._chunker.chunk_file_content(
             file_bytes=file_bytes,
             filename=filename,
             file_type=file_type,
             extra_metadata=extra_metadata,
+            db=db,
         )
 
         if not chunks:
